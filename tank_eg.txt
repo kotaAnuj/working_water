@@ -1,0 +1,38 @@
+// Initialize both managers
+TankStaticManager.init();
+TankDynamicManager.init();
+
+// Add static tank if not exists
+if (!TankStaticManager.getById("TANK001")) {
+  TankStaticManager.create({
+    id: "TANK001",
+    name: "Warangal Main Tank",
+    latitude: 17.9786,
+    longitude: 79.5943,
+    capacity: 1200,
+    state: "Telangana",
+    district: "Warangal"
+  });
+}
+
+// Register the tank for live updates
+TankDynamicManager.registerTank("TANK001");
+
+// Simulate immediate update
+TankDynamicManager.updateTankData("TANK001");
+
+// Log current + history
+console.log(TankDynamicManager.getCurrent("TANK001"));
+console.log(TankDynamicManager.getHistory("TANK001"));
+
+// Start auto-update (every 5 min)
+TankDynamicManager.startAutoUpdate(300000);
+
+
+
+When you connect real devices or cloud endpoints, just replace the simulation line in updateTankData() with:
+
+const data = await fetch(`/api/tanks/${tankId}/live`).then(res => res.json());
+
+
+All logic — saving, history, interval updates — stays the same.

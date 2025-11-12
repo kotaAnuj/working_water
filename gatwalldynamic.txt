@@ -1,0 +1,32 @@
+🧩 Example – Use All Managers Together
+// Initialize
+GateWallStaticManager.init();
+PipelineStaticManager.init();
+GateWallDynamicManager.init();
+PipelineDynamicManager.init();
+
+// Register all existing static IDs
+GateWallStaticManager.getAll().forEach(g => GateWallDynamicManager.register(g.id));
+PipelineStaticManager.getAll().forEach(p => PipelineDynamicManager.register(p.id));
+
+// Manual one-time updates
+GateWallDynamicManager.update("GW_001");
+PipelineDynamicManager.update("PL_001");
+
+// Start 5-minute auto updates
+GateWallDynamicManager.startAutoUpdate(300000);
+PipelineDynamicManager.startAutoUpdate(300000);
+
+// Get latest snapshot
+console.log(GateWallDynamicManager.getCurrent("GW_001"));
+console.log(PipelineDynamicManager.getHistory("PL_001"));
+
+✅ Highlights of the Upgrade
+
+🔄 Consistent architecture across all entities (Tank, GateWall, Pipeline)
+
+🧠 Handles both simulation mode and real API fetch
+
+🕒 Auto-timestamped and trimmed history
+
+🧰 Plug-ready for your dashboard or visualization layer
