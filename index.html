@@ -374,1100 +374,517 @@
     <script src="PipelineStaticManager.js"></script>
     <script src="PipelineDynamicManager.js"></script>
     <script>
-// APP.JS - Main Application Logic with Flow System
+// COMPRESSED IoT WATER MANAGEMENT SYSTEM - Main App Logic
 const App = {
-    map: null,
-    currentLayer: null,
-    markers: {},
-    polylines: {},
-    drawingMode: false,
-    currentPipeline: [],
-    lastClickTime: 0,
-    currentDevice: null,
-    historyData: [],
-    editingDevice: null,
-    tempLocationMarker: null,
-    
+    map: null, currentLayer: null, markers: {}, polylines: {}, drawingMode: false,
+    currentPipeline: [], lastClickTime: 0, currentDevice: null, historyData: [],
+    editingDevice: null, tempLocationMarker: null, hierarchy: {}, tempPolyline: null,
+
     init() {
-        this.initManagers();
+        [TankStaticManager, TankDynamicManager, GateWallStaticManager, 
+         GateWallDynamicManager, PipelineStaticManager, PipelineDynamicManager].forEach(m => m.init());
         this.initMap();
         this.setupEventListeners();
         this.loadData();
         this.startSimulation();
     },
-    
-    initManagers() {
-        TankStaticManager.init();
-        TankDynamicManager.init();
-        GateWallStaticManager.init();
-        GateWallDynamicManager.init();
-        PipelineStaticManager.init();
-        PipelineDynamicManager.init();
-    },
-    
+
     initMap() {
         this.map = L.map('map').setView([17.385, 78.486], 13);
-        
         this.layers = {
             satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'),
             street: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'),
             terrain: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png')
         };
-        
-        this.currentLayer = this.layers.satellite;
-        this.currentLayer.addTo(this.map);
-        
-        this.map.on('click', (e) => this.onMapClick(e));
-        this.map.on('contextmenu', (e) => this.onMapRightClick(e));
+        this.currentLayer = this.layers.satellite.addTo(this.map);
+        this.map.on('click', e => this.onMapClick(e));
+        this.map.on('contextmenu', e => this.onMapRightClick(e));
     },
-    
+
     setupEventListeners() {
-        document.getElementById('deviceSettingsBtn').onclick = () => this.openModal('deviceModal');
-        document.getElementById('gateWallSettingsBtn').onclick = () => this.openModal('gateWallModal');
-        document.getElementById('searchBtn').onclick = () => this.togglePanel('hierarchyPanel');
-        document.getElementById('quickSearchBtn').onclick = () => this.togglePanel('quickSearchPanel');
-        document.getElementById('locationSearchBtn').onclick = () => this.togglePanel('locationSearchPanel');
-        
-        document.getElementById('searchCountry').onchange = (e) => this.onHierarchyChange('country', e.target.value);
-        document.getElementById('searchState').onchange = (e) => this.onHierarchyChange('state', e.target.value);
-        document.getElementById('searchDistrict').onchange = (e) => this.onHierarchyChange('district', e.target.value);
-        document.getElementById('searchMandal').onchange = (e) => this.onHierarchyChange('mandal', e.target.value);
-        document.getElementById('searchHabitation').onchange = (e) => this.onHierarchyChange('habitation', e.target.value);
-        
-        document.getElementById('quickSearchInput').oninput = (e) => this.onQuickSearch(e.target.value);
-        
-        document.querySelectorAll('.modal').forEach(modal => {
-            modal.onclick = (e) => { if(e.target === modal) this.closeModal(modal.id); };
-        });
+        const els = {
+            deviceSettingsBtn: () => this.openModal('deviceModal'),
+            gateWallSettingsBtn: () => this.openModal('gateWallModal'),
+            searchBtn: () => this.togglePanel('hierarchyPanel'),
+            quickSearchBtn: () => this.togglePanel('quickSearchPanel'),
+            locationSearchBtn: () => this.togglePanel('locationSearchPanel')
+        };
+        Object.entries(els).forEach(([id, fn]) => document.getElementById(id).onclick = fn);
+
+        ['searchCountry', 'searchState', 'searchDistrict', 'searchMandal', 'searchHabitation']
+            .forEach((id, i) => document.getElementById(id).onchange = e => 
+                this.onHierarchyChange(['country','state','district','mandal','habitation'][i], e.target.value));
+
+        document.getElementById('quickSearchInput').oninput = e => this.onQuickSearch(e.target.value);
+        document.querySelectorAll('.modal').forEach(m => m.onclick = e => 
+            e.target === m && this.closeModal(m.id));
     },
-    
+
     loadData() {
-        const tanks = TankStaticManager.getAll();
-        tanks.forEach(t => this.addDeviceMarker(t));
-        
-        const gates = GateWallStaticManager.getAll();
-        gates.forEach(g => this.addGateWallMarker(g));
-        
-        const pipes = PipelineStaticManager.getAll();
-        pipes.forEach(p => this.addPipelinePolyline(p));
-        
+        TankStaticManager.getAll().forEach(t => this.addDeviceMarker(t));
+        GateWallStaticManager.getAll().forEach(g => this.addGateWallMarker(g));
+        PipelineStaticManager.getAll().forEach(p => this.addPipelinePolyline(p));
         this.buildHierarchy();
         this.updateDatalistSuggestions();
-        
         this.updateAllPipelineFlow();
     },
-    
+
     addDeviceMarker(device) {
-        const iconMap = {
-            ohsr: { emoji: '💧', color: '#2196F3', label: 'Tank' },
-            gateway: { emoji: '🏭', color: '#4CAF50', label: 'Gateway' }
-        };
-        
-        const config = iconMap[device.type] || iconMap.ohsr;
-        
+        const cfg = {ohsr: {emoji: '💧', color: '#2196F3'}, gateway: {emoji: '🏭', color: '#4CAF50'}}[device.type] || {emoji: '💧', color: '#2196F3'};
         const icon = L.divIcon({
-            html: `<div style="background:${config.color};width:40px;height:40px;border-radius:50%;border:3px solid white;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(0,0,0,0.4);font-size:20px;cursor:pointer;">${config.emoji}</div>`,
-            iconSize: [40, 40],
-            className: 'custom-marker'
+            html: `<div style="background:${cfg.color};width:40px;height:40px;border-radius:50%;border:3px solid white;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(0,0,0,0.4);font-size:20px;cursor:pointer;">${cfg.emoji}</div>`,
+            iconSize: [40, 40], className: 'custom-marker'
         });
-        
         const marker = L.marker([device.latitude, device.longitude], {icon})
-            .addTo(this.map)
-            .bindPopup(this.createDevicePopup(device));
-        
-        // CRITICAL FIX: Prevent marker clicks during drawing mode
-        marker.on('click', (e) => {
-            if(this.drawingMode) {
-                e.originalEvent.stopPropagation();
-                return;
-            }
+            .addTo(this.map).bindPopup(this.createDevicePopup(device));
+        marker.on('click', e => {
+            if(this.drawingMode) { e.originalEvent.stopPropagation(); return; }
             this.showDeviceDetails(device.id);
         });
-        
         this.markers[device.id] = marker;
     },
-    
+
     addGateWallMarker(gw) {
-        const iconMap = {
-            straight: { emoji: '🚪', color: '#9C27B0', shape: '50%' },
-            't-junction': { emoji: '⚙️', color: '#FF5722', shape: '10px' }
-        };
-        
-        const config = iconMap[gw.type] || iconMap.straight;
-        
+        const cfg = {straight: {emoji: '🚪', color: '#9C27B0', shape: '50%'}, 
+                     't-junction': {emoji: '⚙️', color: '#FF5722', shape: '10px'}}[gw.type] || {emoji: '🚪', color: '#9C27B0', shape: '50%'};
         const icon = L.divIcon({
-            html: `<div style="background:${config.color};width:40px;height:40px;border-radius:${config.shape};border:3px solid white;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(0,0,0,0.4);font-size:20px;cursor:pointer;">${config.emoji}</div>`,
-            iconSize: [40, 40],
-            className: 'custom-marker'
+            html: `<div style="background:${cfg.color};width:40px;height:40px;border-radius:${cfg.shape};border:3px solid white;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(0,0,0,0.4);font-size:20px;cursor:pointer;">${cfg.emoji}</div>`,
+            iconSize: [40, 40], className: 'custom-marker'
         });
-        
         const marker = L.marker([gw.latitude, gw.longitude], {icon})
-            .addTo(this.map)
-            .bindPopup(this.createGateWallPopup(gw));
-        
-        // CRITICAL FIX: Prevent marker clicks during drawing mode
-        marker.on('click', (e) => {
-            if(this.drawingMode) {
-                e.originalEvent.stopPropagation();
-                return;
-            }
+            .addTo(this.map).bindPopup(this.createGateWallPopup(gw));
+        marker.on('click', e => {
+            if(this.drawingMode) { e.originalEvent.stopPropagation(); return; }
             this.showGateWallDetails(gw.id);
         });
-        
         this.markers[gw.id] = marker;
     },
-    
+
     addPipelinePolyline(pipeline) {
         if(!pipeline.points || pipeline.points.length < 2) return;
-        
         const dynamic = PipelineDynamicManager.getCurrent(pipeline.id);
-        
         this.renderPipelineSegments(pipeline, dynamic);
-        
-        const connectedGatesCount = (pipeline.connectedGateWalls || []).length;
-        const connectedDevicesCount = (pipeline.connectedDevices || []).length;
-        console.log(`📊 Pipeline ${pipeline.name}: ${connectedGatesCount} gates, ${connectedDevicesCount} devices`);
     },
-    
+
     renderPipelineSegments(pipeline, dynamic) {
-        if(this.polylines[pipeline.id]) {
-            this.polylines[pipeline.id].forEach(poly => this.map.removeLayer(poly));
-        }
-        
-        const segments = dynamic?.flowSegments || [{ start: 0, end: 1, hasFlow: false }];
+        if(this.polylines[pipeline.id]) 
+            this.polylines[pipeline.id].forEach(p => this.map.removeLayer(p));
+
+        const segments = dynamic?.flowSegments || [{start: 0, end: 1, hasFlow: false}];
         const polylines = [];
-        
-        segments.forEach((segment, segIdx) => {
-            const startIdx = Math.floor(segment.start * (pipeline.points.length - 1));
-            const endIdx = Math.ceil(segment.end * (pipeline.points.length - 1));
-            
-            const segmentPoints = pipeline.points.slice(startIdx, endIdx + 1);
-            
-            if(segmentPoints.length < 2) return;
-            
-            const color = segment.hasFlow ? '#2196F3' : '#F44336';
-            
-            const polyline = L.polyline(segmentPoints, {
-                color: color,
-                weight: 6,
-                opacity: 0.8,
-                lineJoin: 'round',
-                lineCap: 'round'
+
+        segments.forEach((seg, idx) => {
+            const startIdx = Math.floor(seg.start * (pipeline.points.length - 1));
+            const endIdx = Math.ceil(seg.end * (pipeline.points.length - 1));
+            const segPts = pipeline.points.slice(startIdx, endIdx + 1);
+            if(segPts.length < 2) return;
+
+            const poly = L.polyline(segPts, {
+                color: seg.hasFlow ? '#2196F3' : '#F44336', weight: 6, opacity: 0.8,
+                lineJoin: 'round', lineCap: 'round'
             }).addTo(this.map);
             
-            // CRITICAL FIX: Prevent polyline clicks during drawing mode
-            polyline.on('click', (e) => {
-                if(this.drawingMode) {
-                    e.originalEvent.stopPropagation();
-                    return;
-                }
+            poly.on('click', e => {
+                if(this.drawingMode) { e.originalEvent.stopPropagation(); return; }
             });
-            
-            if(segment.hasFlow && segmentPoints.length >= 2) {
-                const midIdx = Math.floor(segmentPoints.length / 2);
-                if(midIdx < segmentPoints.length - 1) {
-                    const arrowStart = segmentPoints[midIdx];
-                    const arrowEnd = segmentPoints[midIdx + 1];
-                    
-                    const angle = Math.atan2(arrowEnd[0] - arrowStart[0], arrowEnd[1] - arrowStart[1]) * 180 / Math.PI;
-                    
-                    const arrowIcon = L.divIcon({
-                        html: `<div style="transform:rotate(${angle}deg);font-size:20px;text-shadow:0 0 3px white;">➤</div>`,
-                        iconSize: [20, 20],
-                        className: 'flow-arrow'
-                    });
-                    
-                    const arrowMarker = L.marker(arrowStart, {icon: arrowIcon, interactive: false})
-                        .addTo(this.map);
-                    
-                    polylines.push(arrowMarker);
+
+            if(seg.hasFlow && segPts.length >= 2) {
+                const mid = Math.floor(segPts.length / 2);
+                if(mid < segPts.length - 1) {
+                    const angle = Math.atan2(segPts[mid + 1][0] - segPts[mid][0], 
+                                            segPts[mid + 1][1] - segPts[mid][1]) * 180 / Math.PI;
+                    polylines.push(L.marker(segPts[mid], {
+                        icon: L.divIcon({
+                            html: `<div style="transform:rotate(${angle}deg);font-size:20px;text-shadow:0 0 3px white;">➤</div>`,
+                            iconSize: [20, 20], className: 'flow-arrow'
+                        }), interactive: false
+                    }).addTo(this.map));
                 }
             }
-            
-            if(segIdx === 0) {
-                polyline.bindPopup(this.createPipelinePopup(pipeline, dynamic));
-                polyline.on('click', (e) => {
-                    if(this.drawingMode) {
-                        e.originalEvent.stopPropagation();
-                        return;
-                    }
+
+            if(idx === 0) {
+                poly.bindPopup(this.createPipelinePopup(pipeline, dynamic));
+                poly.on('click', e => {
+                    if(this.drawingMode) { e.originalEvent.stopPropagation(); return; }
                     this.showPipelineDetails(pipeline.id);
                 });
             }
-            
-            polylines.push(polyline);
+            polylines.push(poly);
         });
-        
         this.polylines[pipeline.id] = polylines;
     },
-    
+
     createDevicePopup(device) {
-        const dynamic = TankDynamicManager.getCurrent(device.id);
-        return `
-            <div style="min-width:220px;">
-                <b>${device.name}</b><br>
-                <small>Type: ${device.type.toUpperCase()}</small><br>
-                ${dynamic ? `
-                <small>Level: ${dynamic.waterLevel}m</small><br>
-                <small>Status: ${dynamic.status}</small><br>
-                ` : ''}
+        const dyn = TankDynamicManager.getCurrent(device.id);
+        return `<div style="min-width:220px;"><b>${device.name}</b><br><small>Type: ${device.type.toUpperCase()}</small><br>
+                ${dyn ? `<small>Level: ${dyn.waterLevel}m</small><br><small>Status: ${dyn.status}</small><br>` : ''}
                 <div style="margin-top:10px;display:flex;gap:6px;">
-                    <button onclick="App.showDeviceDetails('${device.id}')" 
-                        style="flex:1;padding:6px;background:#1a73e8;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">
-                        Details
-                    </button>
-                    <button onclick="App.editDevice('${device.id}')" 
-                        style="flex:1;padding:6px;background:#28a745;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">
-                        Edit
-                    </button>
-                    <button onclick="App.deleteDevice('${device.id}')" 
-                        style="flex:1;padding:6px;background:#dc3545;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">
-                        Delete
-                    </button>
-                </div>
-            </div>
-        `;
+                    <button onclick="App.showDeviceDetails('${device.id}')" style="flex:1;padding:6px;background:#1a73e8;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Details</button>
+                    <button onclick="App.editDevice('${device.id}')" style="flex:1;padding:6px;background:#28a745;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Edit</button>
+                    <button onclick="App.deleteDevice('${device.id}')" style="flex:1;padding:6px;background:#dc3545;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Delete</button>
+                </div></div>`;
     },
-    
+
     createGateWallPopup(gw) {
-        const dynamic = GateWallDynamicManager.getCurrent(gw.id);
-        return `
-            <div style="min-width:220px;">
-                <b>${gw.name}</b><br>
-                <small>Type: ${gw.type.toUpperCase()}</small><br>
-                ${dynamic ? `
-                <small>Flow: ${dynamic.flowDirection}</small><br>
-                <small>Status: ${dynamic.status}</small><br>
-                <small>Battery: ${dynamic.batteryLevel}%</small><br>
-                ` : ''}
+        const dyn = GateWallDynamicManager.getCurrent(gw.id);
+        return `<div style="min-width:220px;"><b>${gw.name}</b><br><small>Type: ${gw.type.toUpperCase()}</small><br>
+                ${dyn ? `<small>Flow: ${dyn.flowDirection}</small><br><small>Status: ${dyn.status}</small><br><small>Battery: ${dyn.batteryLevel}%</small><br>` : ''}
                 <div style="margin-top:10px;display:flex;gap:6px;">
-                    <button onclick="App.showGateWallDetails('${gw.id}')" 
-                        style="flex:1;padding:6px;background:#9C27B0;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">
-                        Control
-                    </button>
-                    <button onclick="App.deleteGateWall('${gw.id}')" 
-                        style="flex:1;padding:6px;background:#dc3545;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">
-                        Delete
-                    </button>
-                </div>
-            </div>
-        `;
+                    <button onclick="App.showGateWallDetails('${gw.id}')" style="flex:1;padding:6px;background:#9C27B0;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Control</button>
+                    <button onclick="App.deleteGateWall('${gw.id}')" style="flex:1;padding:6px;background:#dc3545;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Delete</button>
+                </div></div>`;
     },
-    
-    createPipelinePopup(pipeline, dynamic) {
-        const flowInfo = dynamic?.flowSegments ? 
-            `${dynamic.flowSegments.filter(s => s.hasFlow).length} of ${dynamic.flowSegments.length} segments flowing` : 
-            'No flow data';
-        
-        return `
-            <div style="min-width:220px;">
-                <b>${pipeline.name}</b><br>
-                ${dynamic ? `
-                <small>Overall: ${dynamic.flowActive?'<span style="color:#2196F3;">✓ Active</span>':'<span style="color:#F44336;">✗ Inactive</span>'}</small><br>
-                <small>Segments: ${flowInfo}</small><br>
-                <small>Flow Rate: ${dynamic.flowRate} L/min</small><br>
-                <small>Pressure: ${dynamic.pressure} PSI</small><br>
-                ` : ''}
+
+    createPipelinePopup(pipeline, dyn) {
+        const flowInfo = dyn?.flowSegments ? `${dyn.flowSegments.filter(s => s.hasFlow).length} of ${dyn.flowSegments.length} segments flowing` : 'No flow data';
+        return `<div style="min-width:220px;"><b>${pipeline.name}</b><br>
+                ${dyn ? `<small>Overall: ${dyn.flowActive?'<span style="color:#2196F3;">✓ Active</span>':'<span style="color:#F44336;">✗ Inactive</span>'}</small><br>
+                <small>Segments: ${flowInfo}</small><br><small>Flow Rate: ${dyn.flowRate} L/min</small><br><small>Pressure: ${dyn.pressure} PSI</small><br>` : ''}
                 <div style="margin-top:8px;display:flex;gap:6px;">
-                    <button onclick="App.showPipelineDetails('${pipeline.id}')" 
-                        style="flex:1;padding:6px;background:#FF5722;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">
-                        Details
-                    </button>
-                    <button onclick="App.deletePipeline('${pipeline.id}')" 
-                        style="flex:1;padding:6px;background:#dc3545;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">
-                        Delete
-                    </button>
-                </div>
-            </div>
-        `;
+                    <button onclick="App.showPipelineDetails('${pipeline.id}')" style="flex:1;padding:6px;background:#FF5722;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Details</button>
+                    <button onclick="App.deletePipeline('${pipeline.id}')" style="flex:1;padding:6px;background:#dc3545;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Delete</button>
+                </div></div>`;
     },
-    
-    showPipelineDetails(pipelineId) {
-        const pipeline = PipelineStaticManager.getById(pipelineId);
-        if(!pipeline) return;
+
+    showPipelineDetails(id) {
+        const pipe = PipelineStaticManager.getById(id), dyn = PipelineDynamicManager.getCurrent(id);
+        if(!pipe) return;
         
-        const dynamic = PipelineDynamicManager.getCurrent(pipelineId);
-        
-        const panel = document.getElementById('detailsPanel');
-        const header = document.getElementById('panelHeader');
-        const title = document.getElementById('panelTitle');
-        const content = document.getElementById('panelContent');
-        
-        header.classList.remove('gatewall');
-        header.classList.add('pipeline');
-        title.textContent = pipeline.name;
-        
-        const segmentsHTML = dynamic?.flowSegments ? dynamic.flowSegments.map((seg, idx) => `
-            <div class="flow-segment ${seg.hasFlow?'flowing':'blocked'}">
-                <b>Segment ${idx + 1}</b><br>
-                <small>Position: ${(seg.start*100).toFixed(0)}% - ${(seg.end*100).toFixed(0)}%</small><br>
-                <small>Status: ${seg.hasFlow ? '<span style="color:#2196F3;">💧 Flowing</span>' : '<span style="color:#F44336;">🚫 Blocked</span>'}</small>
+        const segs = dyn?.flowSegments ? dyn.flowSegments.map((s, i) => `
+            <div class="flow-segment ${s.hasFlow?'flowing':'blocked'}">
+                <b>Segment ${i + 1}</b><br><small>Position: ${(s.start*100).toFixed(0)}% - ${(s.end*100).toFixed(0)}%</small><br>
+                <small>Status: ${s.hasFlow ? '<span style="color:#2196F3;">💧 Flowing</span>' : '<span style="color:#F44336;">🚫 Blocked</span>'}</small>
+            </div>`).join('') : '<p style="text-align:center;color:#999;">No segment data</p>';
+
+        document.getElementById('panelHeader').classList.remove('gatewall');
+        document.getElementById('panelHeader').classList.add('pipeline');
+        document.getElementById('panelTitle').textContent = pipe.name;
+        document.getElementById('panelContent').innerHTML = `
+            <div class="panel-section"><div class="section-header"><h3>🚰 Pipeline Information</h3></div>
+                <div class="detail-row"><span class="detail-label">Pipeline ID:</span><span class="detail-value">${pipe.id}</span></div>
+                <div class="detail-row"><span class="detail-label">Length:</span><span class="detail-value">${pipe.length || 'N/A'} m</span></div>
+                <div class="detail-row"><span class="detail-label">Material:</span><span class="detail-value">${pipe.material || 'PVC'}</span></div>
+                <div class="detail-row"><span class="detail-label">Diameter:</span><span class="detail-value">${pipe.diameter || '100'} mm</span></div>
             </div>
-        `).join('') : '<p style="text-align:center;color:#999;">No segment data</p>';
-        
-        const connectedGates = pipeline.connectedGateWalls || [];
-        const connectedDevices = pipeline.connectedDevices || [];
-        
-        content.innerHTML = `
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>🚰 Pipeline Information</h3>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Pipeline ID:</span>
-                    <span class="detail-value">${pipeline.id}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Length:</span>
-                    <span class="detail-value">${pipeline.length || 'N/A'} m</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Material:</span>
-                    <span class="detail-value">${pipeline.material || 'PVC'}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Diameter:</span>
-                    <span class="detail-value">${pipeline.diameter || '100'} mm</span>
-                </div>
+            <div class="panel-section"><div class="section-header"><h3>💧 Flow Status</h3></div>
+                ${dyn ? `<div class="detail-row"><span class="detail-label">Overall Status:</span><span class="status-badge ${dyn.flowActive?'status-active':'status-inactive'}">${dyn.flowActive?'Active':'Inactive'}</span></div>
+                <div class="detail-row"><span class="detail-label">Flow Rate:</span><span class="detail-value">${dyn.flowRate} L/min</span></div>
+                <div class="detail-row"><span class="detail-label">Pressure:</span><span class="detail-value">${dyn.pressure} PSI</span></div>
+                <div class="detail-row"><span class="detail-label">Flow Ratio:</span><span class="detail-value">${(dyn.flowRatio*100).toFixed(0)}%</span></div>` : '<p style="text-align:center;color:#999;">No flow data</p>'}
             </div>
-            
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>💧 Flow Status</h3>
-                </div>
-                ${dynamic ? `
-                <div class="detail-row">
-                    <span class="detail-label">Overall Status:</span>
-                    <span class="status-badge ${dynamic.flowActive?'status-active':'status-inactive'}">${dynamic.flowActive?'Active':'Inactive'}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Flow Rate:</span>
-                    <span class="detail-value">${dynamic.flowRate} L/min</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Pressure:</span>
-                    <span class="detail-value">${dynamic.pressure} PSI</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Flow Ratio:</span>
-                    <span class="detail-value">${(dynamic.flowRatio*100).toFixed(0)}%</span>
-                </div>
-                ` : '<p style="text-align:center;color:#999;">No flow data available</p>'}
-            </div>
-            
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>📊 Flow Segments</h3>
-                </div>
-                ${segmentsHTML}
-            </div>
-            
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>🔗 Connections</h3>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Gate Walls:</span>
-                    <span class="detail-value">${connectedGates.length}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Devices:</span>
-                    <span class="detail-value">${connectedDevices.length}</span>
-                </div>
-                ${connectedGates.length > 0 ? `
-                <div style="margin-top:10px;">
-                    <small style="font-weight:600;color:#666;">Connected Gates:</small><br>
-                    ${connectedGates.map(gwId => {
-                        const gw = GateWallStaticManager.getById(gwId);
-                        return gw ? `<small>• ${gw.name}</small><br>` : '';
-                    }).join('')}
-                </div>
-                ` : ''}
-            </div>
-        `;
-        
-        panel.classList.add('active');
+            <div class="panel-section"><div class="section-header"><h3>📊 Flow Segments</h3></div>${segs}</div>
+            <div class="panel-section"><div class="section-header"><h3>🔗 Connections</h3></div>
+                <div class="detail-row"><span class="detail-label">Gate Walls:</span><span class="detail-value">${(pipe.connectedGateWalls||[]).length}</span></div>
+                <div class="detail-row"><span class="detail-label">Devices:</span><span class="detail-value">${(pipe.connectedDevices||[]).length}</span></div>
+            </div>`;
+        document.getElementById('detailsPanel').classList.add('active');
     },
-    
-    showDeviceDetails(deviceId) {
-        const device = TankStaticManager.getById(deviceId);
-        if(!device) return;
-        
-        this.currentDevice = deviceId;
-        const dynamic = TankDynamicManager.getCurrent(deviceId);
-        const history = TankDynamicManager.getHistory(deviceId);
-        
-        const panel = document.getElementById('detailsPanel');
-        const header = document.getElementById('panelHeader');
-        const title = document.getElementById('panelTitle');
-        const content = document.getElementById('panelContent');
-        
-        header.classList.remove('gatewall', 'pipeline');
-        title.textContent = device.name;
-        
-        content.innerHTML = `
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>📋 Device Information</h3>
-                    <button onclick="App.editDevice('${device.id}')" class="btn btn-success" style="width:auto;padding:6px 12px;margin:0;">Edit</button>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Device ID:</span>
-                    <span class="detail-value">${device.id}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Type:</span>
-                    <span class="detail-value">${device.type.toUpperCase()}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Capacity:</span>
-                    <span class="detail-value">${device.capacity} L</span>
-                </div>
+
+    showDeviceDetails(id) {
+        const dev = TankStaticManager.getById(id);
+        if(!dev) return;
+        this.currentDevice = id;
+        const dyn = TankDynamicManager.getCurrent(id);
+
+        document.getElementById('panelHeader').classList.remove('gatewall', 'pipeline');
+        document.getElementById('panelTitle').textContent = dev.name;
+        document.getElementById('panelContent').innerHTML = `
+            <div class="panel-section"><div class="section-header"><h3>📋 Device Information</h3>
+                <button onclick="App.editDevice('${dev.id}')" class="btn btn-success" style="width:auto;padding:6px 12px;margin:0;">Edit</button></div>
+                <div class="detail-row"><span class="detail-label">Device ID:</span><span class="detail-value">${dev.id}</span></div>
+                <div class="detail-row"><span class="detail-label">Type:</span><span class="detail-value">${dev.type.toUpperCase()}</span></div>
+                <div class="detail-row"><span class="detail-label">Capacity:</span><span class="detail-value">${dev.capacity} L</span></div>
             </div>
-            
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>📊 Live Data</h3>
-                </div>
-                ${dynamic ? `
-                <div class="detail-row">
-                    <span class="detail-label">Water Level:</span>
-                    <span class="detail-value">${dynamic.waterLevel} m</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Pressure:</span>
-                    <span class="detail-value">${dynamic.pressure} PSI</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Flow Rate:</span>
-                    <span class="detail-value">${dynamic.flowRate} L/min</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">pH Level:</span>
-                    <span class="detail-value">${dynamic.phLevel}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Temperature:</span>
-                    <span class="detail-value">${dynamic.temperature} °C</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Status:</span>
-                    <span class="status-badge ${dynamic.status==='active'?'status-active':'status-inactive'}">${dynamic.status}</span>
-                </div>
-                ` : '<p style="text-align:center;color:#999;">No live data available</p>'}
+            <div class="panel-section"><div class="section-header"><h3>📊 Live Data</h3></div>
+                ${dyn ? `<div class="detail-row"><span class="detail-label">Water Level:</span><span class="detail-value">${dyn.waterLevel} m</span></div>
+                <div class="detail-row"><span class="detail-label">Pressure:</span><span class="detail-value">${dyn.pressure} PSI</span></div>
+                <div class="detail-row"><span class="detail-label">Flow Rate:</span><span class="detail-value">${dyn.flowRate} L/min</span></div>
+                <div class="detail-row"><span class="detail-label">pH Level:</span><span class="detail-value">${dyn.phLevel}</span></div>
+                <div class="detail-row"><span class="detail-label">Temperature:</span><span class="detail-value">${dyn.temperature} °C</span></div>
+                <div class="detail-row"><span class="detail-label">Status:</span><span class="status-badge ${dyn.status==='active'?'status-active':'status-inactive'}">${dyn.status}</span></div>` : '<p style="text-align:center;color:#999;">No live data</p>'}
             </div>
-            
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>📍 Location</h3>
-                    <button onclick="App.flyToDevice('${device.id}')" class="btn btn-primary" style="width:auto;padding:6px 12px;margin:0;font-size:11px;">
-                        🗺️ Go to Location
-                    </button>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">State:</span>
-                    <span class="detail-value">${device.state||'N/A'}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">District:</span>
-                    <span class="detail-value">${device.district||'N/A'}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Mandal:</span>
-                    <span class="detail-value">${device.mandal||'N/A'}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Habitation:</span>
-                    <span class="detail-value">${device.habitation||'N/A'}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Coordinates:</span>
-                    <span class="detail-value">${device.latitude.toFixed(6)}, ${device.longitude.toFixed(6)}</span>
-                </div>
+            <div class="panel-section"><div class="section-header"><h3>📍 Location</h3>
+                <button onclick="App.flyToDevice('${dev.id}')" class="btn btn-primary" style="width:auto;padding:6px 12px;margin:0;font-size:11px;">🗺️ Go to Location</button></div>
+                <div class="detail-row"><span class="detail-label">State:</span><span class="detail-value">${dev.state||'N/A'}</span></div>
+                <div class="detail-row"><span class="detail-label">District:</span><span class="detail-value">${dev.district||'N/A'}</span></div>
+                <div class="detail-row"><span class="detail-label">Mandal:</span><span class="detail-value">${dev.mandal||'N/A'}</span></div>
+                <div class="detail-row"><span class="detail-label">Habitation:</span><span class="detail-value">${dev.habitation||'N/A'}</span></div>
+                <div class="detail-row"><span class="detail-label">Coordinates:</span><span class="detail-value">${dev.latitude.toFixed(6)}, ${dev.longitude.toFixed(6)}</span></div>
             </div>
-            
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>📜 History</h3>
-                </div>
-                <p style="font-size:11px;color:#666;margin-bottom:10px;">Recorded every 5 minutes (${history.length} records)</p>
-                <button onclick="App.showFullHistory('${device.id}')" class="btn btn-primary">
-                    📊 View Full History
-                </button>
-            </div>
-        `;
-        
-        panel.classList.add('active');
-        
-        // SMOOTH FLY TO DEVICE LOCATION
-        this.map.flyTo([device.latitude, device.longitude], 16, {
-            animate: true,
-            duration: 1.5
-        });
+            <div class="panel-section"><div class="section-header"><h3>📜 History</h3></div>
+                <p style="font-size:11px;color:#666;margin-bottom:10px;">Recorded every 5 minutes (${TankDynamicManager.getHistory(id).length} records)</p>
+                <button onclick="App.showFullHistory('${dev.id}')" class="btn btn-primary">📊 View Full History</button>
+            </div>`;
+        document.getElementById('detailsPanel').classList.add('active');
+        this.map.flyTo([dev.latitude, dev.longitude], 16, {animate: true, duration: 1.5});
     },
-    
-    flyToDevice(deviceId) {
-        const device = TankStaticManager.getById(deviceId);
-        if(!device) return;
-        
-        this.map.flyTo([device.latitude, device.longitude], 18, {
-            animate: true,
-            duration: 1.5
-        });
-        
-        // Pulse the marker
-        if(this.markers[deviceId]) {
-            this.markers[deviceId].openPopup();
-        }
-        
-        this.showNotification(`📍 Viewing ${device.name}`, 'info');
+
+    flyToDevice(id) {
+        const dev = TankStaticManager.getById(id);
+        if(!dev) return;
+        this.map.flyTo([dev.latitude, dev.longitude], 18, {animate: true, duration: 1.5});
+        if(this.markers[id]) this.markers[id].openPopup();
+        this.showNotification(`📍 Viewing ${dev.name}`, 'info');
     },
-    
-    showGateWallDetails(gwId) {
-        const gw = GateWallStaticManager.getById(gwId);
+
+    showGateWallDetails(id) {
+        const gw = GateWallStaticManager.getById(id);
         if(!gw) return;
-        
-        const dynamic = GateWallDynamicManager.getCurrent(gwId);
-        
-        const panel = document.getElementById('detailsPanel');
-        const header = document.getElementById('panelHeader');
-        const title = document.getElementById('panelTitle');
-        const content = document.getElementById('panelContent');
-        
-        header.classList.remove('pipeline');
-        header.classList.add('gatewall');
-        title.textContent = gw.name;
-        
-        const flowControls = this.getFlowControlsHTML(gw, dynamic);
-        
-        content.innerHTML = `
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>🚧 Gate Wall Info</h3>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">ID:</span>
-                    <span class="detail-value">${gw.id}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Type:</span>
-                    <span class="detail-value">${gw.type.toUpperCase()}</span>
-                </div>
-                ${dynamic ? `
-                <div class="detail-row">
-                    <span class="detail-label">Flow Direction:</span>
-                    <span class="detail-value">${dynamic.flowDirection}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Valve State:</span>
-                    <span class="detail-value">${dynamic.valveState}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Battery:</span>
-                    <span class="detail-value">${dynamic.batteryLevel}%</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Pressure:</span>
-                    <span class="detail-value">${dynamic.pressure} PSI</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Status:</span>
-                    <span class="status-badge ${dynamic.status==='active'?'status-active':'status-inactive'}">${dynamic.status}</span>
-                </div>
-                ` : ''}
+        const dyn = GateWallDynamicManager.getCurrent(id);
+
+        document.getElementById('panelHeader').classList.remove('pipeline');
+        document.getElementById('panelHeader').classList.add('gatewall');
+        document.getElementById('panelTitle').textContent = gw.name;
+        document.getElementById('panelContent').innerHTML = `
+            <div class="panel-section"><div class="section-header"><h3>🚧 Gate Wall Info</h3></div>
+                <div class="detail-row"><span class="detail-label">ID:</span><span class="detail-value">${gw.id}</span></div>
+                <div class="detail-row"><span class="detail-label">Type:</span><span class="detail-value">${gw.type.toUpperCase()}</span></div>
+                ${dyn ? `<div class="detail-row"><span class="detail-label">Flow Direction:</span><span class="detail-value">${dyn.flowDirection}</span></div>
+                <div class="detail-row"><span class="detail-label">Valve State:</span><span class="detail-value">${dyn.valveState}</span></div>
+                <div class="detail-row"><span class="detail-label">Battery:</span><span class="detail-value">${dyn.batteryLevel}%</span></div>
+                <div class="detail-row"><span class="detail-label">Pressure:</span><span class="detail-value">${dyn.pressure} PSI</span></div>
+                <div class="detail-row"><span class="detail-label">Status:</span><span class="status-badge ${dyn.status==='active'?'status-active':'status-inactive'}">${dyn.status}</span></div>` : ''}
             </div>
-            
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>🎮 Flow Control</h3>
-                </div>
-                <div class="flow-controls">
-                    ${flowControls}
-                </div>
-                <div class="info-text" style="margin-top:10px;">
-                    💧 Blue pipelines = Water flowing<br>
-                    🔴 Red pipelines = No flow
-                </div>
+            <div class="panel-section"><div class="section-header"><h3>🎮 Flow Control</h3></div>
+                <div class="flow-controls">${this.getFlowControlsHTML(gw, dyn)}</div>
+                <div class="info-text" style="margin-top:10px;">💧 Blue pipelines = Water flowing<br>🔴 Red pipelines = No flow</div>
             </div>
-            
-            <div class="panel-section">
-                <div class="section-header">
-                    <h3>📍 Location</h3>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Habitation:</span>
-                    <span class="detail-value">${gw.habitation||'N/A'}</span>
-                </div>
-                <div class="detail-row">
-                    <span class="detail-label">Mandal:</span>
-                    <span class="detail-value">${gw.mandal||'N/A'}</span>
-                </div>
-            </div>
-        `;
-        
-        panel.classList.add('active');
+            <div class="panel-section"><div class="section-header"><h3>📍 Location</h3></div>
+                <div class="detail-row"><span class="detail-label">Habitation:</span><span class="detail-value">${gw.habitation||'N/A'}</span></div>
+                <div class="detail-row"><span class="detail-label">Mandal:</span><span class="detail-value">${gw.mandal||'N/A'}</span></div>
+            </div>`;
+        document.getElementById('detailsPanel').classList.add('active');
     },
-    
-    getFlowControlsHTML(gw, dynamic) {
-        const currentFlow = dynamic?.flowDirection || 'none';
-        
+
+    getFlowControlsHTML(gw, dyn) {
+        const flow = dyn?.flowDirection || 'none';
         if(gw.type === 'straight') {
-            return `
-                <button class="flow-btn ${currentFlow==='straight'?'active':''}" 
-                    onclick="App.setFlowDirection('${gw.id}','straight')">
-                    ➡️ Flow On
-                </button>
-                <button class="flow-btn ${currentFlow==='none'?'active':''}" 
-                    onclick="App.setFlowDirection('${gw.id}','none')">
-                    ⛔ Stop Flow
-                </button>
-            `;
-        } else {
-            return `
-                <button class="flow-btn ${currentFlow==='left'?'active':''}" 
-                    onclick="App.setFlowDirection('${gw.id}','left')">
-                    ⬅️ Flow Left
-                </button>
-                <button class="flow-btn ${currentFlow==='right'?'active':''}" 
-                    onclick="App.setFlowDirection('${gw.id}','right')">
-                    ➡️ Flow Right
-                </button>
-                <button class="flow-btn ${currentFlow==='straight'?'active':''}" 
-                    onclick="App.setFlowDirection('${gw.id}','straight')">
-                    ⬆️ Flow Straight
-                </button>
-                <button class="flow-btn ${currentFlow==='none'?'active':''}" 
-                    onclick="App.setFlowDirection('${gw.id}','none')">
-                    ⛔ Stop All
-                </button>
-            `;
+            return `<button class="flow-btn ${flow==='straight'?'active':''}" onclick="App.setFlowDirection('${gw.id}','straight')">➡️ Flow On</button>
+                    <button class="flow-btn ${flow==='none'?'active':''}" onclick="App.setFlowDirection('${gw.id}','none')">⛔ Stop Flow</button>`;
         }
+        return `<button class="flow-btn ${flow==='left'?'active':''}" onclick="App.setFlowDirection('${gw.id}','left')">⬅️ Flow Left</button>
+                <button class="flow-btn ${flow==='right'?'active':''}" onclick="App.setFlowDirection('${gw.id}','right')">➡️ Flow Right</button>
+                <button class="flow-btn ${flow==='straight'?'active':''}" onclick="App.setFlowDirection('${gw.id}','straight')">⬆️ Flow Straight</button>
+                <button class="flow-btn ${flow==='none'?'active':''}" onclick="App.setFlowDirection('${gw.id}','none')">⛔ Stop All</button>`;
     },
-    
-    setFlowDirection(gwId, direction) {
-        const gw = GateWallStaticManager.getById(gwId);
+
+    setFlowDirection(id, dir) {
+        const gw = GateWallStaticManager.getById(id);
         if(!gw) return;
-        
-        GateWallDynamicManager.update(gwId, {
-            id: gwId,
-            timestamp: new Date().toISOString(),
-            flowDirection: direction,
-            valveState: direction==='none'?'closed':'open',
-            pressure: direction==='none'?0:(10+Math.random()*40).toFixed(1),
-            flowRate: direction==='none'?0:(Math.random()*150).toFixed(1),
-            batteryLevel: 75+Math.random()*25,
-            signalStrength: 60+Math.random()*40,
-            temperature: (25+Math.random()*5).toFixed(1),
-            mode: 'manual',
-            status: direction==='none'?'inactive':'active',
-            lastCommand: direction
+        GateWallDynamicManager.update(id, {
+            id, timestamp: new Date().toISOString(), flowDirection: dir,
+            valveState: dir==='none'?'closed':'open', pressure: dir==='none'?0:(10+Math.random()*40).toFixed(1),
+            flowRate: dir==='none'?0:(Math.random()*150).toFixed(1), batteryLevel: 75+Math.random()*25,
+            signalStrength: 60+Math.random()*40, temperature: (25+Math.random()*5).toFixed(1),
+            mode: 'manual', status: dir==='none'?'inactive':'active', lastCommand: dir
         });
-        
         this.updateAllPipelineFlow();
-        
-        const action = direction === 'none' ? '🔴 CLOSED - Water blocked downstream' : '🔵 OPEN - Water flowing';
-        this.showNotification(`Gate ${gw.name}: ${action}`, 'success');
-        
-        this.showGateWallDetails(gwId);
+        this.showNotification(`Gate ${gw.name}: ${dir==='none'?'🔴 CLOSED':'🔵 OPEN'}`, 'success');
+        this.showGateWallDetails(id);
     },
-    
+
     updateAllPipelineFlow() {
-        const pipes = PipelineStaticManager.getAll();
-        const gates = GateWallStaticManager.getAll();
-        
+        const pipes = PipelineStaticManager.getAll(), gates = GateWallStaticManager.getAll();
         PipelineDynamicManager.updateAllPipelines(pipes, gates);
-        
-        pipes.forEach(pipe => {
-            const dynamic = PipelineDynamicManager.getCurrent(pipe.id);
-            this.renderPipelineSegments(pipe, dynamic);
-        });
+        pipes.forEach(p => this.renderPipelineSegments(p, PipelineDynamicManager.getCurrent(p.id)));
     },
-    
-    showFullHistory(deviceId) {
-        const device = TankStaticManager.getById(deviceId);
-        if(!device) return;
-        
-        const history = TankDynamicManager.getHistory(deviceId);
-        this.historyData = history;
-        
-        document.getElementById('historyModalTitle').textContent = `📊 ${device.name} - History`;
-        
-        const today = new Date().toISOString().split('T')[0];
+
+    showFullHistory(id) {
+        const dev = TankStaticManager.getById(id);
+        if(!dev) return;
+        const hist = TankDynamicManager.getHistory(id);
+        this.historyData = hist;
+        document.getElementById('historyModalTitle').textContent = `📊 ${dev.name} - History`;
         document.getElementById('historyStartDate').value = '';
-        document.getElementById('historyEndDate').value = today;
-        
-        this.renderHistoryTable(history);
+        document.getElementById('historyEndDate').value = new Date().toISOString().split('T')[0];
+        this.renderHistoryTable(hist);
         this.openModal('historyModal');
     },
-    
+
     renderHistoryTable(data) {
-        const tbody = document.getElementById('historyTableBody');
-        tbody.innerHTML = data.map(record => `
-            <tr>
-                <td>${new Date(record.timestamp).toLocaleString()}</td>
-                <td>${record.waterLevel} m</td>
-                <td>${record.pressure} PSI</td>
-                <td>${record.flowRate} L/min</td>
-                <td>${record.phLevel}</td>
-                <td>${record.temperature} °C</td>
-                <td><span class="status-badge ${record.status==='active'?'status-active':'status-inactive'}">${record.status}</span></td>
-            </tr>
-        `).join('');
+        document.getElementById('historyTableBody').innerHTML = data.map(r => `
+            <tr><td>${new Date(r.timestamp).toLocaleString()}</td><td>${r.waterLevel} m</td><td>${r.pressure} PSI</td>
+            <td>${r.flowRate} L/min</td><td>${r.phLevel}</td><td>${r.temperature} °C</td>
+            <td><span class="status-badge ${r.status==='active'?'status-active':'status-inactive'}">${r.status}</span></td></tr>`).join('');
     },
-    
+
     onMapClick(e) {
         if(this.drawingMode) {
             const now = Date.now();
-            if(now - this.lastClickTime < 300) {
-                this.finishPipeline();
-            } else {
-                this.currentPipeline.push([e.latlng.lat, e.latlng.lng]);
-                this.updateTempPipeline();
-            }
+            if(now - this.lastClickTime < 300) this.finishPipeline();
+            else { this.currentPipeline.push([e.latlng.lat, e.latlng.lng]); this.updateTempPipeline(); }
             this.lastClickTime = now;
         }
     },
-    
+
     onMapRightClick(e) {
         if(this.drawingMode) return;
-        
-        document.getElementById('deviceLat').value = e.latlng.lat.toFixed(6);
-        document.getElementById('deviceLng').value = e.latlng.lng.toFixed(6);
-        document.getElementById('gwLat').value = e.latlng.lat.toFixed(6);
-        document.getElementById('gwLng').value = e.latlng.lng.toFixed(6);
+        ['deviceLat', 'deviceLng', 'gwLat', 'gwLng'].forEach(id => 
+            document.getElementById(id).value = e.latlng[id.includes('Lat')?'lat':'lng'].toFixed(6));
     },
-    
+
     updateTempPipeline() {
-        if(this.tempPolyline) {
-            this.map.removeLayer(this.tempPolyline);
-        }
-        
-        if(this.currentPipeline.length > 0) {
-            this.tempPolyline = L.polyline(this.currentPipeline, {
-                color: '#FF5722',
-                weight: 4,
-                opacity: 0.7,
-                dashArray: '10, 10'
-            }).addTo(this.map);
-        }
+        if(this.tempPolyline) this.map.removeLayer(this.tempPolyline);
+        if(this.currentPipeline.length > 0) 
+            this.tempPolyline = L.polyline(this.currentPipeline, {color: '#FF5722', weight: 4, opacity: 0.7, dashArray: '10, 10'}).addTo(this.map);
     },
-    
+
     finishPipeline() {
-        if(this.currentPipeline.length < 2) {
-            this.showNotification('Pipeline needs at least 2 points', 'warning');
-            return;
-        }
-        
-        const connectedGates = this.findNearbyGateWalls(this.currentPipeline);
-        const connectedDevices = this.findNearbyDevices(this.currentPipeline);
-        
-        const pipeline = {
-            id: 'pipe_'+Date.now(),
-            name: 'Pipeline '+Date.now(),
-            points: this.currentPipeline,
-            connectedGateWalls: connectedGates,
-            connectedDevices: connectedDevices,
-            material: 'PVC',
-            diameter: 100,
-            length: this.calculateLength(this.currentPipeline),
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+        if(this.currentPipeline.length < 2) { this.showNotification('Pipeline needs at least 2 points', 'warning'); return; }
+        const pipe = {
+            id: 'pipe_'+Date.now(), name: 'Pipeline '+Date.now(), points: this.currentPipeline,
+            connectedGateWalls: this.findNearbyGateWalls(this.currentPipeline),
+            connectedDevices: this.findNearbyDevices(this.currentPipeline),
+            material: 'PVC', diameter: 100, length: this.calculateLength(this.currentPipeline),
+            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
         };
-        
-        PipelineStaticManager.create(pipeline);
-        PipelineDynamicManager.register(pipeline.id);
-        
-        const gates = GateWallStaticManager.getAll();
-        PipelineDynamicManager.update(pipeline.id, null, pipeline, gates);
-        
-        this.addPipelinePolyline(pipeline);
-        
-        if(this.tempPolyline) {
-            this.map.removeLayer(this.tempPolyline);
-            this.tempPolyline = null;
-        }
-        
-        this.currentPipeline = [];
-        this.drawingMode = false;
-        this.map.dragging.enable();
+        PipelineStaticManager.create(pipe);
+        PipelineDynamicManager.register(pipe.id);
+        PipelineDynamicManager.update(pipe.id, null, pipe, GateWallStaticManager.getAll());
+        this.addPipelinePolyline(pipe);
+        if(this.tempPolyline) { this.map.removeLayer(this.tempPolyline); this.tempPolyline = null; }
+        this.currentPipeline = []; this.drawingMode = false; this.map.dragging.enable();
         document.getElementById('drawingIndicator').classList.remove('active');
         document.getElementById('drawPipelineBtn').textContent = '🎨 Start Drawing Pipeline';
-        document.getElementById('drawPipelineBtn').classList.remove('btn-danger');
-        document.getElementById('drawPipelineBtn').classList.add('btn-success');
-        
-        let connectionMsg = `Pipeline created! Connected: ${connectedGates.length} gates, ${connectedDevices.length} devices`;
-        if(connectedGates.length === 0 && connectedDevices.length === 0) {
-            connectionMsg = 'Pipeline created (no connections detected - try drawing closer to gates/devices)';
-        }
-        this.showNotification(connectionMsg, 'success');
-        
-        console.log('✅ New pipeline:', {
-            id: pipeline.id,
-            points: pipeline.points.length,
-            gates: connectedGates,
-            devices: connectedDevices
-        });
+        document.getElementById('drawPipelineBtn').classList.replace('btn-danger', 'btn-success');
+        this.showNotification(`Pipeline created! Connected: ${pipe.connectedGateWalls.length} gates, ${pipe.connectedDevices.length} devices`, 'success');
     },
-    
-    findNearbyGateWalls(points) {
-        const threshold = 0.005;
-        const nearby = [];
-        
-        const gates = GateWallStaticManager.getAll();
-        points.forEach(point => {
-            gates.forEach(gw => {
-                const dist = Math.sqrt(
-                    Math.pow(gw.latitude - point[0], 2) + 
-                    Math.pow(gw.longitude - point[1], 2)
-                );
-                if(dist < threshold && !nearby.includes(gw.id)) {
-                    nearby.push(gw.id);
-                    console.log(`🔗 Connected gate: ${gw.name} (distance: ${(dist*111000).toFixed(0)}m)`);
-                }
-            });
-        });
-        
-        return nearby;
-    },
-    
-    findNearbyDevices(points) {
-        const threshold = 0.005;
-        const nearby = [];
-        
-        const devices = TankStaticManager.getAll();
-        points.forEach(point => {
-            devices.forEach(d => {
-                const dist = Math.sqrt(
-                    Math.pow(d.latitude - point[0], 2) + 
-                    Math.pow(d.longitude - point[1], 2)
-                );
-                if(dist < threshold && !nearby.includes(d.id)) {
-                    nearby.push(d.id);
-                    console.log(`🔗 Connected device: ${d.name} (distance: ${(dist*111000).toFixed(0)}m)`);
-                }
-            });
-        });
-        
-        return nearby;
-    },
-    
-    calculateLength(points) {
-        let length = 0;
-        for(let i=1; i<points.length; i++) {
-            const p1 = points[i-1];
-            const p2 = points[i];
-            length += Math.sqrt(
-                Math.pow(p2[0]-p1[0], 2) + 
-                Math.pow(p2[1]-p1[1], 2)
-            ) * 111000;
-        }
-        return Math.round(length);
-    },
-    
-    buildHierarchy() {
-        const hierarchy = {};
-        
-        TankStaticManager.getAll().forEach(d => {
-            const c = d.country || 'India';
-            const s = d.state || 'Unassigned';
-            const di = d.district || 'Unassigned';
-            const m = d.mandal || 'Unassigned';
-            const h = d.habitation || 'Unassigned';
-            
-            if(!hierarchy[c]) hierarchy[c] = {};
-            if(!hierarchy[c][s]) hierarchy[c][s] = {};
-            if(!hierarchy[c][s][di]) hierarchy[c][s][di] = {};
-            if(!hierarchy[c][s][di][m]) hierarchy[c][s][di][m] = {};
-            if(!hierarchy[c][s][di][m][h]) hierarchy[c][s][di][m][h] = [];
-            
-            hierarchy[c][s][di][m][h].push(d);
-        });
-        
+
+    findNearbyGateWalls(pts) {
+        const nearby = [], thresh = 0.005;
         GateWallStaticManager.getAll().forEach(gw => {
-            const c = gw.country || 'India';
-            const s = gw.state || 'Unassigned';
-            const di = gw.district || 'Unassigned';
-            const m = gw.mandal || 'Unassigned';
-            const h = gw.habitation || 'Unassigned';
-            
-            if(!hierarchy[c]) hierarchy[c] = {};
-            if(!hierarchy[c][s]) hierarchy[c][s] = {};
-            if(!hierarchy[c][s][di]) hierarchy[c][s][di] = {};
-            if(!hierarchy[c][s][di][m]) hierarchy[c][s][di][m] = {};
-            if(!hierarchy[c][s][di][m][h]) hierarchy[c][s][di][m][h] = [];
-            
-            hierarchy[c][s][di][m][h].push(gw);
+            pts.forEach(pt => {
+                const dist = Math.sqrt(Math.pow(gw.latitude - pt[0], 2) + Math.pow(gw.longitude - pt[1], 2));
+                if(dist < thresh && !nearby.includes(gw.id)) nearby.push(gw.id);
+            });
         });
-        
-        this.hierarchy = hierarchy;
+        return nearby;
+    },
+
+    findNearbyDevices(pts) {
+        const nearby = [], thresh = 0.005;
+        TankStaticManager.getAll().forEach(d => {
+            pts.forEach(pt => {
+                const dist = Math.sqrt(Math.pow(d.latitude - pt[0], 2) + Math.pow(d.longitude - pt[1], 2));
+                if(dist < thresh && !nearby.includes(d.id)) nearby.push(d.id);
+            });
+        });
+        return nearby;
+    },
+
+    calculateLength(pts) {
+        let len = 0;
+        for(let i = 1; i < pts.length; i++) 
+            len += Math.sqrt(Math.pow(pts[i][0]-pts[i-1][0], 2) + Math.pow(pts[i][1]-pts[i-1][1], 2)) * 111000;
+        return Math.round(len);
+    },
+
+    buildHierarchy() {
+        this.hierarchy = {};
+        [...TankStaticManager.getAll(), ...GateWallStaticManager.getAll()].forEach(d => {
+            const [c, s, di, m, h] = [d.country||'India', d.state||'Unassigned', d.district||'Unassigned', 
+                                       d.mandal||'Unassigned', d.habitation||'Unassigned'];
+            if(!this.hierarchy[c]) this.hierarchy[c] = {};
+            if(!this.hierarchy[c][s]) this.hierarchy[c][s] = {};
+            if(!this.hierarchy[c][s][di]) this.hierarchy[c][s][di] = {};
+            if(!this.hierarchy[c][s][di][m]) this.hierarchy[c][s][di][m] = {};
+            if(!this.hierarchy[c][s][di][m][h]) this.hierarchy[c][s][di][m][h] = [];
+            this.hierarchy[c][s][di][m][h].push(d);
+        });
         this.populateCountryDropdown();
     },
-    
+
     populateCountryDropdown() {
-        const select = document.getElementById('searchCountry');
-        const countries = Object.keys(this.hierarchy);
-        select.innerHTML = '<option value="">Select Country</option>' + 
-            countries.map(c => `<option value="${c}">${c}</option>`).join('');
+        document.getElementById('searchCountry').innerHTML = '<option value="">Select Country</option>' + 
+            Object.keys(this.hierarchy).map(c => `<option value="${c}">${c}</option>`).join('');
     },
-    
-    onHierarchyChange(level, value) {
-        const country = document.getElementById('searchCountry').value;
-        const state = document.getElementById('searchState').value;
-        const district = document.getElementById('searchDistrict').value;
-        const mandal = document.getElementById('searchMandal').value;
+
+    onHierarchyChange(level, val) {
+        const [c, s, di, m] = ['searchCountry', 'searchState', 'searchDistrict', 'searchMandal'].map(id => 
+            document.getElementById(id).value);
         
-        if(level === 'country' && value) {
-            const states = Object.keys(this.hierarchy[value]);
+        if(level === 'country' && val) {
             document.getElementById('searchState').innerHTML = '<option value="">Select State</option>' + 
-                states.map(s => `<option value="${s}">${s}</option>`).join('');
+                Object.keys(this.hierarchy[val]).map(s => `<option value="${s}">${s}</option>`).join('');
             document.getElementById('searchState').disabled = false;
             this.resetDropdowns(['searchDistrict','searchMandal','searchHabitation']);
         }
-        
-        if(level === 'state' && country && value) {
-            const districts = Object.keys(this.hierarchy[country][value]);
+        if(level === 'state' && c && val) {
             document.getElementById('searchDistrict').innerHTML = '<option value="">Select District</option>' + 
-                districts.map(d => `<option value="${d}">${d}</option>`).join('');
+                Object.keys(this.hierarchy[c][val]).map(d => `<option value="${d}">${d}</option>`).join('');
             document.getElementById('searchDistrict').disabled = false;
             this.resetDropdowns(['searchMandal','searchHabitation']);
         }
-        
-        if(level === 'district' && country && state && value) {
-            const mandals = Object.keys(this.hierarchy[country][state][value]);
+        if(level === 'district' && c && s && val) {
             document.getElementById('searchMandal').innerHTML = '<option value="">Select Mandal</option>' + 
-                mandals.map(m => `<option value="${m}">${m}</option>`).join('');
+                Object.keys(this.hierarchy[c][s][val]).map(m => `<option value="${m}">${m}</option>`).join('');
             document.getElementById('searchMandal').disabled = false;
             this.resetDropdowns(['searchHabitation']);
         }
-        
-        if(level === 'mandal' && country && state && district && value) {
-            const habitations = Object.keys(this.hierarchy[country][state][district][value]);
+        if(level === 'mandal' && c && s && di && val) {
             document.getElementById('searchHabitation').innerHTML = '<option value="">Select Habitation</option>' + 
-                habitations.map(h => `<option value="${h}">${h}</option>`).join('');
+                Object.keys(this.hierarchy[c][s][di][val]).map(h => `<option value="${h}">${h}</option>`).join('');
             document.getElementById('searchHabitation').disabled = false;
         }
-        
-        if(level === 'habitation' && country && state && district && mandal && value) {
-            const devices = this.hierarchy[country][state][district][mandal][value];
-            this.displayHierarchyResults(devices);
-        }
+        if(level === 'habitation' && c && s && di && m && val) 
+            this.displayHierarchyResults(this.hierarchy[c][s][di][m][val]);
     },
-    
-    displayHierarchyResults(devices) {
-        const container = document.getElementById('hierarchyResults');
-        const list = document.getElementById('hierarchyResultsList');
-        
-        if(!devices || devices.length === 0) {
-            container.style.display = 'none';
-            return;
-        }
-        
-        list.innerHTML = devices.map(d => {
-            const type = d.type || 'gatewall';
-            const typeClass = type === 'ohsr' ? 'type-ohsr' : type === 'gateway' ? 'type-gateway' : 'type-gatewall';
-            const typeName = type.toUpperCase();
-            
-            return `
-                <div class="result-item" onclick="App.${type==='ohsr'||type==='gateway'?'showDeviceDetails':'showGateWallDetails'}('${d.id}')">
-                    <span class="item-type ${typeClass}">${typeName}</span>
-                    <b>${d.name}</b><br>
-                    <small>${d.id}</small>
-                </div>
-            `;
+
+    displayHierarchyResults(devs) {
+        if(!devs?.length) { document.getElementById('hierarchyResults').style.display = 'none'; return; }
+        document.getElementById('hierarchyResultsList').innerHTML = devs.map(d => {
+            const type = d.type || 'gatewall', typeClass = {ohsr:'type-ohsr',gateway:'type-gateway'}[type] || 'type-gatewall';
+            const fn = type==='ohsr'||type==='gateway'?'showDeviceDetails':'showGateWallDetails';
+            return `<div class="result-item" onclick="App.${fn}('${d.id}')">
+                <span class="item-type ${typeClass}">${type.toUpperCase()}</span><b>${d.name}</b><br><small>${d.id}</small></div>`;
         }).join('');
-        
-        container.style.display = 'block';
+        document.getElementById('hierarchyResults').style.display = 'block';
     },
-    
-    onQuickSearch(query) {
-        if(query.length < 2) {
-            document.getElementById('quickResults').style.display = 'none';
-            return;
-        }
-        
-        const results = [];
-        const q = query.toLowerCase();
-        
+
+    onQuickSearch(q) {
+        if(q.length < 2) { document.getElementById('quickResults').style.display = 'none'; return; }
+        const results = [], ql = q.toLowerCase();
         TankStaticManager.getAll().forEach(d => {
-            if(d.name.toLowerCase().includes(q) || d.id.toLowerCase().includes(q)) {
+            if(d.name.toLowerCase().includes(ql) || d.id.toLowerCase().includes(ql)) 
                 results.push({...d, searchType: 'device'});
-            }
         });
-        
         GateWallStaticManager.getAll().forEach(gw => {
-            if(gw.name.toLowerCase().includes(q) || gw.id.toLowerCase().includes(q)) {
+            if(gw.name.toLowerCase().includes(ql) || gw.id.toLowerCase().includes(ql)) 
                 results.push({...gw, searchType: 'gatewall'});
-            }
         });
-        
         PipelineStaticManager.getAll().forEach(p => {
-            if(p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)) {
+            if(p.name.toLowerCase().includes(ql) || p.id.toLowerCase().includes(ql)) 
                 results.push({...p, searchType: 'pipeline'});
-            }
         });
-        
         this.displayQuickResults(results);
     },
-    
+
     displayQuickResults(results) {
-        const container = document.getElementById('quickResults');
-        const list = document.getElementById('quickResultsList');
-        
-        if(results.length === 0) {
-            container.style.display = 'none';
-            return;
-        }
-        
-        list.innerHTML = results.map(item => {
-            const type = item.searchType || 'device';
-            const typeClass = item.type === 'ohsr' ? 'type-ohsr' : 
-                             item.type === 'gateway' ? 'type-gateway' : 
-                             type === 'gatewall' ? 'type-gatewall' : 'type-pipeline';
-            const typeName = item.type ? item.type.toUpperCase() : type.toUpperCase();
-            
-            let onclick = '';
-            if(type === 'device') onclick = `App.showDeviceDetails('${item.id}')`;
-            else if(type === 'gatewall') onclick = `App.showGateWallDetails('${item.id}')`;
-            else onclick = `App.showPipelineDetails('${item.id}')`;
-            
-            return `
-                <div class="result-item" onclick="${onclick}">
-                    <span class="item-type ${typeClass}">${typeName}</span>
-                    <b>${item.name}</b><br>
-                    <small>${item.habitation||item.mandal||'N/A'}</small>
-                </div>
-            `;
+        if(!results.length) { document.getElementById('quickResults').style.display = 'none'; return; }
+        document.getElementById('quickResultsList').innerHTML = results.map(item => {
+            const typeClass = {ohsr:'type-ohsr',gateway:'type-gateway',gatewall:'type-gatewall',pipeline:'type-pipeline'}[item.type||item.searchType];
+            const fn = item.searchType==='device'?'showDeviceDetails':item.searchType==='gatewall'?'showGateWallDetails':'showPipelineDetails';
+            return `<div class="result-item" onclick="App.${fn}('${item.id}')">
+                <span class="item-type ${typeClass}">${(item.type||item.searchType).toUpperCase()}</span>
+                <b>${item.name}</b><br><small>${item.habitation||item.mandal||'N/A'}</small></div>`;
         }).join('');
-        
-        container.style.display = 'block';
+        document.getElementById('quickResults').style.display = 'block';
     },
-    
+
     updateDatalistSuggestions() {
-        const states = new Set();
-        const districts = new Set();
-        const mandals = new Set();
-        const habitations = new Set();
-        
-        TankStaticManager.getAll().forEach(d => {
+        const [states, districts, mandals, habitations] = [new Set(), new Set(), new Set(), new Set()];
+        [...TankStaticManager.getAll(), ...GateWallStaticManager.getAll()].forEach(d => {
             if(d.state) states.add(d.state);
             if(d.district) districts.add(d.district);
             if(d.mandal) mandals.add(d.mandal);
             if(d.habitation) habitations.add(d.habitation);
         });
-        
-        GateWallStaticManager.getAll().forEach(gw => {
-            if(gw.state) states.add(gw.state);
-            if(gw.district) districts.add(gw.district);
-            if(gw.mandal) mandals.add(gw.mandal);
-            if(gw.habitation) habitations.add(gw.habitation);
-        });
-        
         document.getElementById('statesList').innerHTML = Array.from(states).map(s => `<option value="${s}">`).join('');
         document.getElementById('districtsList').innerHTML = Array.from(districts).map(d => `<option value="${d}">`).join('');
         document.getElementById('mandalsList').innerHTML = Array.from(mandals).map(m => `<option value="${m}">`).join('');
         document.getElementById('habitationsList').innerHTML = Array.from(habitations).map(h => `<option value="${h}">`).join('');
     },
-    
+
     resetDropdowns(ids) {
         ids.forEach(id => {
             const el = document.getElementById(id);
@@ -1476,682 +893,354 @@ const App = {
         });
         document.getElementById('hierarchyResults').style.display = 'none';
     },
-    
-    editDevice(deviceId) {
-        const device = TankStaticManager.getById(deviceId);
-        if(!device) return;
-        
-        this.editingDevice = deviceId;
-        
-        document.getElementById('deviceName').value = device.name;
-        document.getElementById('deviceType').value = device.type;
-        document.getElementById('deviceCountry').value = device.country;
-        document.getElementById('deviceState').value = device.state || '';
-        document.getElementById('deviceDistrict').value = device.district || '';
-        document.getElementById('deviceMandal').value = device.mandal || '';
-        document.getElementById('deviceHabitation').value = device.habitation || '';
-        document.getElementById('deviceLat').value = device.latitude;
-        document.getElementById('deviceLng').value = device.longitude;
-        document.getElementById('deviceCapacity').value = device.capacity;
-        
+
+    editDevice(id) {
+        const dev = TankStaticManager.getById(id);
+        if(!dev) return;
+        this.editingDevice = id;
+        ['deviceName','deviceType','deviceCountry','deviceState','deviceDistrict','deviceMandal',
+         'deviceHabitation','deviceLat','deviceLng','deviceCapacity'].forEach((field, i) => {
+            document.getElementById(field).value = [dev.name, dev.type, dev.country, dev.state||'', 
+                dev.district||'', dev.mandal||'', dev.habitation||'', dev.latitude, dev.longitude, dev.capacity][i];
+        });
         this.openModal('deviceModal');
         this.closeDetailsPanel();
         this.showNotification('Editing device - modify and click Add to save', 'info');
     },
-    
-    deleteDevice(deviceId) {
+
+    deleteDevice(id) {
         if(!confirm('Delete this device?')) return;
-        
-        if(this.markers[deviceId]) {
-            this.map.removeLayer(this.markers[deviceId]);
-            delete this.markers[deviceId];
-        }
-        
-        TankStaticManager.remove(deviceId);
-        
+        if(this.markers[id]) { this.map.removeLayer(this.markers[id]); delete this.markers[id]; }
+        TankStaticManager.remove(id);
         this.buildHierarchy();
         this.showNotification('Device deleted', 'info');
         this.closeDetailsPanel();
     },
-    
-    deleteGateWall(gwId) {
+
+    deleteGateWall(id) {
         if(!confirm('Delete this gate wall?')) return;
-        
-        if(this.markers[gwId]) {
-            this.map.removeLayer(this.markers[gwId]);
-            delete this.markers[gwId];
-        }
-        
-        GateWallStaticManager.remove(gwId);
-        
+        if(this.markers[id]) { this.map.removeLayer(this.markers[id]); delete this.markers[id]; }
+        GateWallStaticManager.remove(id);
         this.updateAllPipelineFlow();
-        
         this.buildHierarchy();
         this.showNotification('Gate wall deleted', 'info');
         this.closeDetailsPanel();
     },
-    
-    deletePipeline(pipelineId) {
+
+    deletePipeline(id) {
         if(!confirm('Delete this pipeline?')) return;
-        
-        if(this.polylines[pipelineId]) {
-            this.polylines[pipelineId].forEach(poly => this.map.removeLayer(poly));
-            delete this.polylines[pipelineId];
-        }
-        
-        PipelineStaticManager.remove(pipelineId);
-        
+        if(this.polylines[id]) { this.polylines[id].forEach(p => this.map.removeLayer(p)); delete this.polylines[id]; }
+        PipelineStaticManager.remove(id);
         this.showNotification('Pipeline deleted', 'info');
     },
-    
+
     startSimulation() {
         setInterval(() => {
             TankStaticManager.getAll().forEach(d => {
                 TankDynamicManager.updateTankData(d.id);
-                if(this.markers[d.id]) {
-                    const dynamic = TankDynamicManager.getCurrent(d.id);
+                if(this.markers[d.id]) 
                     this.markers[d.id].setPopupContent(this.createDevicePopup(d));
-                }
             });
-            
             GateWallStaticManager.getAll().forEach(gw => {
-                const dynamic = GateWallDynamicManager.getCurrent(gw.id);
-                if(dynamic) {
-                    dynamic.batteryLevel = Math.max(0, dynamic.batteryLevel - 0.1);
-                    GateWallDynamicManager.update(gw.id, dynamic);
-                }
-                if(this.markers[gw.id]) {
-                    this.markers[gw.id].setPopupContent(this.createGateWallPopup(gw));
-                }
+                const dyn = GateWallDynamicManager.getCurrent(gw.id);
+                if(dyn) { dyn.batteryLevel = Math.max(0, dyn.batteryLevel - 0.1); GateWallDynamicManager.update(gw.id, dyn); }
+                if(this.markers[gw.id]) this.markers[gw.id].setPopupContent(this.createGateWallPopup(gw));
             });
         }, 5000);
     },
-    
-    openModal(modalId) {
-        document.getElementById(modalId).classList.add('active');
-        if(modalId === 'deviceModal') {
-            this.updateDeviceList();
-        } else if(modalId === 'gateWallModal') {
-            this.updateGateWallList();
-        }
+
+    openModal(id) {
+        document.getElementById(id).classList.add('active');
+        if(id === 'deviceModal') this.updateDeviceList();
+        else if(id === 'gateWallModal') this.updateGateWallList();
     },
-    
-    closeModal(modalId) {
-        document.getElementById(modalId).classList.remove('active');
-    },
-    
-    togglePanel(panelId) {
-        const panel = document.getElementById(panelId);
-        const otherPanels = ['hierarchyPanel', 'quickSearchPanel', 'locationSearchPanel'].filter(p => p !== panelId);
-        otherPanels.forEach(p => document.getElementById(p).style.display = 'none');
+
+    closeModal(id) { document.getElementById(id).classList.remove('active'); },
+    togglePanel(id) {
+        const panel = document.getElementById(id);
+        ['hierarchyPanel', 'quickSearchPanel', 'locationSearchPanel'].filter(p => p !== id)
+            .forEach(p => document.getElementById(p).style.display = 'none');
         panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
     },
-    
-    closeDetailsPanel() {
-        document.getElementById('detailsPanel').classList.remove('active');
-    },
-    
+    closeDetailsPanel() { document.getElementById('detailsPanel').classList.remove('active'); },
+
     updateDeviceList() {
-        const container = document.getElementById('deviceListContainer');
-        const devices = TankStaticManager.getAll();
-        
-        if(devices.length === 0) {
-            container.innerHTML = '<div style="text-align:center;padding:20px;color:#999;">No devices added yet</div>';
-            return;
-        }
-        
-        container.innerHTML = devices.map(d => `
+        const devs = TankStaticManager.getAll();
+        document.getElementById('deviceListContainer').innerHTML = devs.length ? devs.map(d => `
             <div class="result-item" onclick="App.showDeviceDetails('${d.id}')">
-                <span class="item-type type-${d.type}">${d.type.toUpperCase()}</span>
-                <b>${d.name}</b><br>
-                <small>${d.id} • ${d.habitation||d.mandal||'N/A'}</small>
-            </div>
-        `).join('');
+                <span class="item-type type-${d.type}">${d.type.toUpperCase()}</span><b>${d.name}</b><br>
+                <small>${d.id} • ${d.habitation||d.mandal||'N/A'}</small></div>`).join('') : 
+            '<div style="text-align:center;padding:20px;color:#999;">No devices added yet</div>';
     },
-    
+
     updateGateWallList() {
-        const container = document.getElementById('gateWallListContainer');
         const gates = GateWallStaticManager.getAll();
-        
-        if(gates.length === 0) {
-            container.innerHTML = '<div style="text-align:center;padding:20px;color:#999;">No gate walls added yet</div>';
-            return;
-        }
-        
-        container.innerHTML = gates.map(gw => `
+        document.getElementById('gateWallListContainer').innerHTML = gates.length ? gates.map(gw => `
             <div class="result-item" onclick="App.showGateWallDetails('${gw.id}')">
-                <span class="item-type type-gatewall">${gw.type.toUpperCase()}</span>
-                <b>${gw.name}</b><br>
-                <small>${gw.id} • ${gw.habitation||gw.mandal||'N/A'}</small>
-            </div>
-        `).join('');
+                <span class="item-type type-gatewall">${gw.type.toUpperCase()}</span><b>${gw.name}</b><br>
+                <small>${gw.id} • ${gw.habitation||gw.mandal||'N/A'}</small></div>`).join('') : 
+            '<div style="text-align:center;padding:20px;color:#999;">No gate walls added yet</div>';
     },
-    
-    showNotification(message, type = 'info') {
-        const notif = document.createElement('div');
-        notif.className = `notification ${type}`;
-        notif.textContent = message;
-        document.body.appendChild(notif);
-        
-        setTimeout(() => {
-            notif.style.animation = 'slideOut 0.3s ease';
-            setTimeout(() => notif.remove(), 300);
-        }, 3000);
+
+    showNotification(msg, type = 'info') {
+        const n = document.createElement('div');
+        n.className = `notification ${type}`;
+        n.textContent = msg;
+        document.body.appendChild(n);
+        setTimeout(() => { n.style.animation = 'slideOut 0.3s ease'; setTimeout(() => n.remove(), 300); }, 3000);
     }
 };
 
 // UI Functions
-function changeMapLayer(type) {
+const changeMapLayer = type => {
     if(App.currentLayer) App.map.removeLayer(App.currentLayer);
-    App.currentLayer = App.layers[type];
-    App.currentLayer.addTo(App.map);
-    
-    document.querySelectorAll('.map-controls button').forEach(btn => btn.classList.remove('active'));
+    App.currentLayer = App.layers[type].addTo(App.map);
+    document.querySelectorAll('.map-controls button').forEach(b => b.classList.remove('active'));
     document.getElementById('btn-' + type).classList.add('active');
-}
+};
 
-function addDevice() {
-    const name = document.getElementById('deviceName').value.trim();
-    const type = document.getElementById('deviceType').value;
-    const country = document.getElementById('deviceCountry').value;
-    const state = document.getElementById('deviceState').value.trim();
-    const district = document.getElementById('deviceDistrict').value.trim();
-    const mandal = document.getElementById('deviceMandal').value.trim();
-    const habitation = document.getElementById('deviceHabitation').value.trim();
-    const lat = parseFloat(document.getElementById('deviceLat').value);
-    const lng = parseFloat(document.getElementById('deviceLng').value);
-    const capacity = parseFloat(document.getElementById('deviceCapacity').value) || 1000;
+const addDevice = () => {
+    const fields = ['Name','Type','Country','State','District','Mandal','Habitation','Lat','Lng','Capacity']
+        .map(f => document.getElementById('device'+f).value);
+    const [name, type, country, state, district, mandal, habitation, lat, lng, capacity] = 
+        [fields[0].trim(), fields[1], fields[2], fields[3].trim(), fields[4].trim(), 
+         fields[5].trim(), fields[6].trim(), parseFloat(fields[7]), parseFloat(fields[8]), parseFloat(fields[9])||1000];
     
-    if(!name || !lat || !lng) {
-        App.showNotification('Please fill required fields', 'error');
-        return;
-    }
+    if(!name || !lat || !lng) { App.showNotification('Please fill required fields', 'error'); return; }
     
-    let device;
-    
+    let dev;
     if(App.editingDevice) {
-        TankStaticManager.update(App.editingDevice, {
-            name, type, country, state, district, mandal, habitation, 
-            latitude: lat, longitude: lng, capacity
-        });
-        device = TankStaticManager.getById(App.editingDevice);
-        
-        if(App.markers[App.editingDevice]) {
-            App.map.removeLayer(App.markers[App.editingDevice]);
-        }
-        App.addDeviceMarker(device);
+        TankStaticManager.update(App.editingDevice, {name, type, country, state, district, mandal, habitation, latitude: lat, longitude: lng, capacity});
+        dev = TankStaticManager.getById(App.editingDevice);
+        if(App.markers[App.editingDevice]) App.map.removeLayer(App.markers[App.editingDevice]);
+        App.addDeviceMarker(dev);
         App.showNotification('Device updated!', 'success');
         App.editingDevice = null;
     } else {
-        device = TankStaticManager.create({
-            id: type + '_' + Date.now(),
-            name, type, country, state, district, mandal, habitation, 
-            latitude: lat, longitude: lng, capacity,
-            altitude: 0
-        });
-        
-        TankDynamicManager.registerTank(device.id);
-        TankDynamicManager.updateTankData(device.id);
-        
-        App.addDeviceMarker(device);
+        dev = TankStaticManager.create({id: type+'_'+Date.now(), name, type, country, state, district, mandal, 
+            habitation, latitude: lat, longitude: lng, capacity, altitude: 0});
+        TankDynamicManager.registerTank(dev.id);
+        TankDynamicManager.updateTankData(dev.id);
+        App.addDeviceMarker(dev);
         App.showNotification('Device added!', 'success');
     }
-    
-    document.getElementById('deviceName').value = '';
-    document.getElementById('deviceLat').value = '';
-    document.getElementById('deviceLng').value = '';
-    document.getElementById('deviceCapacity').value = '';
-    
+    ['deviceName','deviceLat','deviceLng','deviceCapacity'].forEach(id => document.getElementById(id).value = '');
     App.buildHierarchy();
     App.updateDatalistSuggestions();
-    
-    const pipes = PipelineStaticManager.getAll();
-    const connectedPipes = pipes.filter(p => 
-        p.connectedDevices && p.connectedDevices.includes(device.id)
-    );
-    
-    if(connectedPipes.length > 0) {
-        App.updateAllPipelineFlow();
-        App.showNotification('Connected pipelines updated', 'info');
-    }
-}
+    const connPipes = PipelineStaticManager.getAll().filter(p => p.connectedDevices?.includes(dev.id));
+    if(connPipes.length) { App.updateAllPipelineFlow(); App.showNotification('Connected pipelines updated', 'info'); }
+};
 
-function addGateWall() {
-    const name = document.getElementById('gwName').value.trim();
-    const type = document.getElementById('gwType').value;
-    const country = document.getElementById('gwCountry').value;
-    const state = document.getElementById('gwState').value.trim();
-    const district = document.getElementById('gwDistrict').value.trim();
-    const mandal = document.getElementById('gwMandal').value.trim();
-    const habitation = document.getElementById('gwHabitation').value.trim();
-    const lat = parseFloat(document.getElementById('gwLat').value);
-    const lng = parseFloat(document.getElementById('gwLng').value);
+const addGateWall = () => {
+    const fields = ['Name','Type','Country','State','District','Mandal','Habitation','Lat','Lng']
+        .map(f => document.getElementById('gw'+f).value);
+    const [name, type, country, state, district, mandal, habitation, lat, lng] = 
+        [fields[0].trim(), fields[1], fields[2], fields[3].trim(), fields[4].trim(), 
+         fields[5].trim(), fields[6].trim(), parseFloat(fields[7]), parseFloat(fields[8])];
     
-    if(!name || !lat || !lng) {
-        App.showNotification('Please fill required fields', 'error');
-        return;
-    }
+    if(!name || !lat || !lng) { App.showNotification('Please fill required fields', 'error'); return; }
     
-    const gw = GateWallStaticManager.create({
-        id: 'gw_' + Date.now(),
-        name, type, country, state, district, mandal, habitation,
-        latitude: lat, longitude: lng, altitude: 0,
-        firmwareVersion: 'v1.0.0', controllerId: ''
-    });
-    
+    const gw = GateWallStaticManager.create({id: 'gw_'+Date.now(), name, type, country, state, district, 
+        mandal, habitation, latitude: lat, longitude: lng, altitude: 0, firmwareVersion: 'v1.0.0', controllerId: ''});
     GateWallDynamicManager.register(gw.id);
-    GateWallDynamicManager.update(gw.id, {
-        id: gw.id,
-        timestamp: new Date().toISOString(),
-        flowDirection: 'straight',
-        valveState: 'open',
-        pressure: (10+Math.random()*40).toFixed(1),
-        flowRate: (Math.random()*150).toFixed(1),
-        batteryLevel: 85 + Math.random()*15,
-        signalStrength: 70 + Math.random()*30,
-        temperature: (25+Math.random()*5).toFixed(1),
-        mode: 'manual',
-        status: 'active',
-        lastCommand: 'straight'
-    });
-    
+    GateWallDynamicManager.update(gw.id, {id: gw.id, timestamp: new Date().toISOString(), flowDirection: 'straight',
+        valveState: 'open', pressure: (10+Math.random()*40).toFixed(1), flowRate: (Math.random()*150).toFixed(1),
+        batteryLevel: 85+Math.random()*15, signalStrength: 70+Math.random()*30, 
+        temperature: (25+Math.random()*5).toFixed(1), mode: 'manual', status: 'active', lastCommand: 'straight'});
     App.addGateWallMarker(gw);
     App.showNotification('Gate wall added! (Default: OPEN)', 'success');
-    
-    document.getElementById('gwName').value = '';
-    document.getElementById('gwLat').value = '';
-    document.getElementById('gwLng').value = '';
-    
+    ['gwName','gwLat','gwLng'].forEach(id => document.getElementById(id).value = '');
     App.buildHierarchy();
     App.updateDatalistSuggestions();
-    
     App.showNotification('Draw a pipeline through this gate to control flow', 'info');
-}
+};
 
-function toggleDrawPipeline() {
-    if(App.drawingMode) {
-        App.finishPipeline();
-    } else {
-        App.drawingMode = true;
-        App.currentPipeline = [];
-        App.map.dragging.disable();
+const toggleDrawPipeline = () => {
+    if(App.drawingMode) App.finishPipeline();
+    else {
+        App.drawingMode = true; App.currentPipeline = []; App.map.dragging.disable();
         document.getElementById('drawingIndicator').classList.add('active');
         document.getElementById('drawPipelineBtn').textContent = '✓ Finish Pipeline';
-        document.getElementById('drawPipelineBtn').classList.remove('btn-success');
-        document.getElementById('drawPipelineBtn').classList.add('btn-danger');
-        App.showNotification('🎨 Drawing Mode Active - Click map to add points, double-click to finish', 'info');
+        document.getElementById('drawPipelineBtn').classList.replace('btn-success', 'btn-danger');
+        App.showNotification('🎨 Drawing Mode Active', 'info');
     }
-}
+};
 
-function switchTab(category, tab) {
-    const modalId = category === 'device' ? 'deviceModal' : 'gateWallModal';
-    document.querySelectorAll(`#${modalId} .tab-btn`).forEach(btn => btn.classList.remove('active'));
-    document.querySelectorAll(`#${modalId} .tab-content`).forEach(content => content.classList.remove('active'));
-    
+const switchTab = (cat, tab) => {
+    const mid = cat === 'device' ? 'deviceModal' : 'gateWallModal';
+    document.querySelectorAll(`#${mid} .tab-btn`).forEach(b => b.classList.remove('active'));
+    document.querySelectorAll(`#${mid} .tab-content`).forEach(c => c.classList.remove('active'));
     event.target.classList.add('active');
-    document.getElementById(`${category}-${tab}-tab`).classList.add('active');
-}
+    document.getElementById(`${cat}-${tab}-tab`).classList.add('active');
+};
 
-function closeModal(modalId) {
-    App.closeModal(modalId);
-}
+const closeModal = id => App.closeModal(id);
+const closeDetailsPanel = () => App.closeDetailsPanel();
 
-function closeDetailsPanel() {
-    App.closeDetailsPanel();
-}
-
-function filterHistory() {
-    const start = document.getElementById('historyStartDate').value;
-    const end = document.getElementById('historyEndDate').value;
-    
+const filterHistory = () => {
+    const [start, end] = ['historyStartDate', 'historyEndDate'].map(id => document.getElementById(id).value);
     let filtered = App.historyData;
-    
-    if(start) {
-        filtered = filtered.filter(r => new Date(r.timestamp) >= new Date(start));
-    }
-    if(end) {
-        filtered = filtered.filter(r => new Date(r.timestamp) <= new Date(end + 'T23:59:59'));
-    }
-    
+    if(start) filtered = filtered.filter(r => new Date(r.timestamp) >= new Date(start));
+    if(end) filtered = filtered.filter(r => new Date(r.timestamp) <= new Date(end + 'T23:59:59'));
     App.renderHistoryTable(filtered);
-}
+};
 
-function exportHistoryCSV() {
-    const rows = [
-        ['Timestamp','Water Level (m)','Pressure (PSI)','Flow Rate (L/min)','pH Level','Temperature (°C)','Status']
-    ];
-    
-    const tbody = document.getElementById('historyTableBody');
-    const trows = tbody.querySelectorAll('tr');
-    
-    trows.forEach(tr => {
-        const cells = tr.querySelectorAll('td');
-        const row = Array.from(cells).map(cell => {
-            let text = cell.textContent.trim();
-            if(cell.querySelector('.status-badge')) {
-                text = cell.querySelector('.status-badge').textContent;
-            }
-            return text;
-        });
-        rows.push(row);
+const exportHistoryCSV = () => {
+    const rows = [['Timestamp','Water Level (m)','Pressure (PSI)','Flow Rate (L/min)','pH Level','Temperature (°C)','Status']];
+    document.querySelectorAll('#historyTableBody tr').forEach(tr => {
+        rows.push(Array.from(tr.querySelectorAll('td')).map(td => 
+            td.querySelector('.status-badge')?.textContent || td.textContent.trim()));
     });
-    
     const csv = rows.map(r => r.join(',')).join('\n');
-    const blob = new Blob([csv], {type: 'text/csv'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `history_${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    
+    const blob = new Blob([csv], {type: 'text/csv'}), url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = `history_${Date.now()}.csv`; a.click(); URL.revokeObjectURL(url);
     App.showNotification('History exported to CSV', 'success');
-}
+};
 
-function exportAllData() {
-    const data = {
-        devices: TankStaticManager.getAll(),
-        gateWalls: GateWallStaticManager.getAll(),
-        pipelines: PipelineStaticManager.getAll(),
-        timestamp: new Date().toISOString(),
-        version: '1.0'
-    };
-    
-    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `iot-data-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    
+const exportAllData = () => {
+    const data = {devices: TankStaticManager.getAll(), gateWalls: GateWallStaticManager.getAll(),
+        pipelines: PipelineStaticManager.getAll(), timestamp: new Date().toISOString(), version: '1.0'};
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}), 
+          url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = `iot-data-${Date.now()}.json`; a.click(); URL.revokeObjectURL(url);
     App.showNotification('Data exported successfully!', 'success');
-}
+};
 
-function importData(event) {
-    const file = event.target.files[0];
+const importData = e => {
+    const file = e.target.files[0];
     if(!file) return;
-    
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = e => {
         try {
             const data = JSON.parse(e.target.result);
-            
-            TankStaticManager.clearAll();
-            GateWallStaticManager.clearAll();
-            PipelineStaticManager.clearAll();
-            
-            Object.keys(App.markers).forEach(id => {
-                App.map.removeLayer(App.markers[id]);
-            });
+            [TankStaticManager, GateWallStaticManager, PipelineStaticManager].forEach(m => m.clearAll());
+            Object.keys(App.markers).forEach(id => App.map.removeLayer(App.markers[id]));
             Object.keys(App.polylines).forEach(id => {
-                if(Array.isArray(App.polylines[id])) {
-                    App.polylines[id].forEach(poly => App.map.removeLayer(poly));
-                } else {
-                    App.map.removeLayer(App.polylines[id]);
-                }
+                (Array.isArray(App.polylines[id]) ? App.polylines[id] : [App.polylines[id]])
+                    .forEach(p => App.map.removeLayer(p));
             });
-            App.markers = {};
-            App.polylines = {};
-            
-            if(data.devices) {
-                data.devices.forEach(d => {
-                    TankStaticManager.create(d);
-                    TankDynamicManager.registerTank(d.id);
-                    TankDynamicManager.updateTankData(d.id);
-                    App.addDeviceMarker(d);
-                });
-            }
-            
-            if(data.gateWalls) {
-                data.gateWalls.forEach(gw => {
-                    GateWallStaticManager.create(gw);
-                    GateWallDynamicManager.register(gw.id);
-                    GateWallDynamicManager.update(gw.id);
-                    App.addGateWallMarker(gw);
-                });
-            }
-            
-            if(data.pipelines) {
-                data.pipelines.forEach(p => {
-                    PipelineStaticManager.create(p);
-                    PipelineDynamicManager.register(p.id);
-                    App.addPipelinePolyline(p);
-                });
-            }
-            
-            App.buildHierarchy();
-            App.updateDatalistSuggestions();
-            App.updateAllPipelineFlow();
+            App.markers = {}; App.polylines = {};
+            if(data.devices) data.devices.forEach(d => {
+                TankStaticManager.create(d); TankDynamicManager.registerTank(d.id); 
+                TankDynamicManager.updateTankData(d.id); App.addDeviceMarker(d);
+            });
+            if(data.gateWalls) data.gateWalls.forEach(gw => {
+                GateWallStaticManager.create(gw); GateWallDynamicManager.register(gw.id);
+                GateWallDynamicManager.update(gw.id); App.addGateWallMarker(gw);
+            });
+            if(data.pipelines) data.pipelines.forEach(p => {
+                PipelineStaticManager.create(p); PipelineDynamicManager.register(p.id); App.addPipelinePolyline(p);
+            });
+            App.buildHierarchy(); App.updateDatalistSuggestions(); App.updateAllPipelineFlow();
             App.showNotification('Data imported successfully!', 'success');
-        } catch(err) {
-            App.showNotification('Failed to import: ' + err.message, 'error');
-        }
+        } catch(err) { App.showNotification('Failed to import: ' + err.message, 'error'); }
     };
     reader.readAsText(file);
-}
+};
 
-function generateDummyData() {
-    if(!confirm('Generate dummy data? This will add sample devices and gate walls.')) return;
+const generateDummyData = () => {
+    if(!confirm('Generate dummy data?')) return;
+    const [states, districts, mandals, habitations] = [
+        ['Telangana', 'Andhra Pradesh', 'Karnataka'],
+        ['Warangal', 'Karimnagar', 'Khammam'],
+        ['Warangal Urban', 'Hanamkonda', 'Jangaon'],
+        ['Hanamkonda', 'Kazipet', 'Elkathurthy']
+    ], base = [17.385, 78.486];
     
-    const states = ['Telangana', 'Andhra Pradesh', 'Karnataka'];
-    const districts = ['Warangal', 'Karimnagar', 'Khammam'];
-    const mandals = ['Warangal Urban', 'Hanamkonda', 'Jangaon'];
-    const habitations = ['Hanamkonda', 'Kazipet', 'Elkathurthy'];
-    
-    const baseLatLng = [17.385, 78.486];
-    
-    for(let i=0; i<10; i++) {
-        const lat = baseLatLng[0] + (Math.random() - 0.5) * 0.1;
-        const lng = baseLatLng[1] + (Math.random() - 0.5) * 0.1;
-        
-        const device = TankStaticManager.create({
-            id: 'tank_dummy_' + i,
-            name: 'OHSR Tank ' + (i+1),
-            type: i % 3 === 0 ? 'gateway' : 'ohsr',
-            country: 'India',
-            state: states[i % states.length],
-            district: districts[i % districts.length],
-            mandal: mandals[i % mandals.length],
-            habitation: habitations[i % habitations.length],
-            latitude: lat,
-            longitude: lng,
-            altitude: 100 + Math.random() * 50,
-            capacity: 1000 + Math.random() * 2000
-        });
-        
-        TankDynamicManager.registerTank(device.id);
-        TankDynamicManager.updateTankData(device.id);
-        App.addDeviceMarker(device);
+    for(let i = 0; i < 10; i++) {
+        const [lat, lng] = [base[0]+(Math.random()-0.5)*0.1, base[1]+(Math.random()-0.5)*0.1];
+        const dev = TankStaticManager.create({id: 'tank_dummy_'+i, name: 'OHSR Tank '+(i+1),
+            type: i%3===0?'gateway':'ohsr', country: 'India', state: states[i%3], district: districts[i%3],
+            mandal: mandals[i%3], habitation: habitations[i%3], latitude: lat, longitude: lng,
+            altitude: 100+Math.random()*50, capacity: 1000+Math.random()*2000});
+        TankDynamicManager.registerTank(dev.id); TankDynamicManager.updateTankData(dev.id); App.addDeviceMarker(dev);
     }
     
-    for(let i=0; i<5; i++) {
-        const lat = baseLatLng[0] + (Math.random() - 0.5) * 0.1;
-        const lng = baseLatLng[1] + (Math.random() - 0.5) * 0.1;
-        
-        const gw = GateWallStaticManager.create({
-            id: 'gw_dummy_' + i,
-            name: 'Gate Wall ' + (i+1),
-            type: i % 2 === 0 ? 'straight' : 't-junction',
-            country: 'India',
-            state: states[i % states.length],
-            district: districts[i % districts.length],
-            mandal: mandals[i % mandals.length],
-            habitation: habitations[i % habitations.length],
-            latitude: lat,
-            longitude: lng,
-            altitude: 100,
-            firmwareVersion: 'v1.0.0',
-            controllerId: 'CTRL' + i
-        });
-        
-        GateWallDynamicManager.register(gw.id);
-        GateWallDynamicManager.update(gw.id);
-        App.addGateWallMarker(gw);
+    for(let i = 0; i < 5; i++) {
+        const [lat, lng] = [base[0]+(Math.random()-0.5)*0.1, base[1]+(Math.random()-0.5)*0.1];
+        const gw = GateWallStaticManager.create({id: 'gw_dummy_'+i, name: 'Gate Wall '+(i+1),
+            type: i%2===0?'straight':'t-junction', country: 'India', state: states[i%3],
+            district: districts[i%3], mandal: mandals[i%3], habitation: habitations[i%3],
+            latitude: lat, longitude: lng, altitude: 100, firmwareVersion: 'v1.0.0', controllerId: 'CTRL'+i});
+        GateWallDynamicManager.register(gw.id); GateWallDynamicManager.update(gw.id); App.addGateWallMarker(gw);
     }
     
-    App.buildHierarchy();
-    App.updateDatalistSuggestions();
-    App.updateAllPipelineFlow();
+    App.buildHierarchy(); App.updateDatalistSuggestions(); App.updateAllPipelineFlow();
     App.showNotification('Dummy data generated!', 'success');
-}
+};
 
-// Location Search Functions
-let searchTimeout = null;
-let searchCache = {};
+// Location Search
+let searchTimeout = null, searchCache = {};
 
-function searchLocation() {
-    const query = document.getElementById('locationSearchInput').value.trim();
-    if(!query || query.length < 2) {
-        document.getElementById('locationResults').style.display = 'none';
-        return;
-    }
+const searchLocation = () => {
+    const q = document.getElementById('locationSearchInput').value.trim();
+    if(!q || q.length < 2) { document.getElementById('locationResults').style.display = 'none'; return; }
     
     document.getElementById('locationResultsList').innerHTML = '<div style="padding:10px;text-align:center;color:#666;">🔍 Searching...</div>';
     document.getElementById('locationResults').style.display = 'block';
     
-    if(searchCache[query]) {
-        displayLocationResults(searchCache[query]);
-        return;
-    }
+    if(searchCache[q]) { displayLocationResults(searchCache[q]); return; }
     
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
-        const url = `https://nominatim.openstreetmap.org/search?` +
-            `format=json&` +
-            `q=${encodeURIComponent(query)}&` +
-            `limit=10&` +
-            `addressdetails=1&` +
-            `countrycodes=in&` +
-            `dedupe=1`;
-        
-        fetch(url, {
-            headers: {
-                'User-Agent': 'IoT Water Management System'
-            }
-        })
-        .then(response => response.json())
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=10&addressdetails=1&countrycodes=in&dedupe=1`, 
+            {headers: {'User-Agent': 'IoT Water Management System'}})
+        .then(r => r.json())
         .then(data => {
-            if(data && data.length > 0) {
-                searchCache[query] = data;
-                displayLocationResults(data);
-            } else {
-                document.getElementById('locationResultsList').innerHTML = 
-                    '<div style="padding:10px;text-align:center;color:#999;">No results found. Try different keywords.</div>';
-            }
+            if(data?.length) { searchCache[q] = data; displayLocationResults(data); }
+            else document.getElementById('locationResultsList').innerHTML = 
+                '<div style="padding:10px;text-align:center;color:#999;">No results found</div>';
         })
-        .catch(err => {
-            console.error('Location search error:', err);
-            document.getElementById('locationResultsList').innerHTML = 
-                '<div style="padding:10px;text-align:center;color:#dc3545;">⚠️ Search failed. Please try again.</div>';
-        });
+        .catch(() => document.getElementById('locationResultsList').innerHTML = 
+            '<div style="padding:10px;text-align:center;color:#dc3545;">⚠️ Search failed</div>');
     }, 300);
-}
+};
 
-function displayLocationResults(results) {
-    const container = document.getElementById('locationResults');
-    const list = document.getElementById('locationResultsList');
-    
-    list.innerHTML = results.slice(0, 10).map((result, idx) => {
-        const type = result.type || result.class || 'place';
-        const icon = getLocationIcon(type);
-        const address = formatAddress(result);
-        
-        return `
-        <div class="result-item" onclick="selectLocation(${result.lat}, ${result.lon}, '${result.display_name.replace(/'/g, "\\'")}', ${idx})" style="cursor:pointer;">
-            <span style="font-size:18px;margin-right:8px;">${icon}</span>
-            <div style="flex:1;">
-                <b>${result.name || address.split(',')[0]}</b><br>
-                <small style="color:#666;">${address}</small><br>
-                <small style="color:#999;font-size:10px;">📍 ${parseFloat(result.lat).toFixed(6)}, ${parseFloat(result.lon).toFixed(6)}</small>
-            </div>
-        </div>
-        `;
+const displayLocationResults = results => {
+    document.getElementById('locationResultsList').innerHTML = results.slice(0, 10).map((r, i) => {
+        const icon = {city:'🏙️',town:'🏘️',village:'🏡',state:'🗺️',building:'🏢',water:'💧',road:'🛣️'}[r.type||r.class] || '📍';
+        const addr = r.address ? [r.address.village, r.address.town, r.address.city, 
+            r.address.state_district, r.address.state].filter(Boolean).join(', ') || r.display_name : r.display_name;
+        return `<div class="result-item" onclick="selectLocation(${r.lat}, ${r.lon}, '${r.display_name.replace(/'/g, "\\'")}', ${i})">
+            <span style="font-size:18px;margin-right:8px;">${icon}</span><div style="flex:1;">
+            <b>${r.name || addr.split(',')[0]}</b><br><small style="color:#666;">${addr}</small><br>
+            <small style="color:#999;font-size:10px;">📍 ${parseFloat(r.lat).toFixed(6)}, ${parseFloat(r.lon).toFixed(6)}</small>
+            </div></div>`;
     }).join('');
-    
-    container.style.display = 'block';
-}
+    document.getElementById('locationResults').style.display = 'block';
+};
 
-function getLocationIcon(type) {
-    const iconMap = {
-        'city': '🏙️',
-        'town': '🏘️',
-        'village': '🏡',
-        'state': '🗺️',
-        'county': '📍',
-        'administrative': '🏛️',
-        'building': '🏢',
-        'water': '💧',
-        'road': '🛣️',
-        'place': '📌'
-    };
-    return iconMap[type] || '📍';
-}
-
-function formatAddress(result) {
-    if(result.address) {
-        const parts = [];
-        if(result.address.village) parts.push(result.address.village);
-        if(result.address.town) parts.push(result.address.town);
-        if(result.address.city) parts.push(result.address.city);
-        if(result.address.state_district) parts.push(result.address.state_district);
-        if(result.address.state) parts.push(result.address.state);
-        return parts.join(', ') || result.display_name;
-    }
-    return result.display_name;
-}
-
-function selectLocation(lat, lon, name, index) {
-    const currentZoom = App.map.getZoom();
-    App.map.setView([lat, lon], currentZoom, {animate: true});
+const selectLocation = (lat, lon, name) => {
+    App.map.setView([lat, lon], App.map.getZoom(), {animate: true});
+    if(App.tempLocationMarker) App.map.removeLayer(App.tempLocationMarker);
+    App.tempLocationMarker = L.marker([lat, lon], {
+        icon: L.divIcon({
+            html: '<div style="background:#FF5722;width:50px;height:50px;border-radius:50%;border:4px solid white;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 15px rgba(0,0,0,0.5);font-size:25px;animation:pulse 2s infinite;">📍</div>',
+            iconSize: [50, 50]
+        })
+    }).addTo(App.map).bindPopup(`<b>Selected Location</b><br>${name}<br><br><button onclick="removeLocationMarker()" style="padding:5px 10px;background:#dc3545;color:white;border:none;border-radius:4px;cursor:pointer;">Remove</button>`).openPopup();
     
-    if(App.tempLocationMarker) {
-        App.map.removeLayer(App.tempLocationMarker);
-    }
-    
-    const icon = L.divIcon({
-        html: `<div style="background:#FF5722;width:50px;height:50px;border-radius:50%;border:4px solid white;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 15px rgba(0,0,0,0.5);font-size:25px;animation:pulse 2s infinite;">📍</div>`,
-        iconSize: [50, 50]
-    });
-    
-    App.tempLocationMarker = L.marker([lat, lon], {icon})
-        .addTo(App.map)
-        .bindPopup(`<b>Selected Location</b><br>${name}<br><br><button onclick="removeLocationMarker()" style="padding:5px 10px;background:#dc3545;color:white;border:none;border-radius:4px;cursor:pointer;">Remove</button>`)
-        .openPopup();
-    
-    document.getElementById('deviceLat').value = lat.toFixed(6);
-    document.getElementById('deviceLng').value = lon.toFixed(6);
-    document.getElementById('gwLat').value = lat.toFixed(6);
-    document.getElementById('gwLng').value = lon.toFixed(6);
-    
+    ['deviceLat', 'deviceLng', 'gwLat', 'gwLng'].forEach(id => 
+        document.getElementById(id).value = (id.includes('Lat') ? lat : lon).toFixed(6));
     App.showNotification('Location selected! Coordinates auto-filled.', 'success');
-}
+};
 
-function removeLocationMarker() {
-    if(App.tempLocationMarker) {
-        App.map.removeLayer(App.tempLocationMarker);
-        App.tempLocationMarker = null;
-        App.showNotification('Location marker removed', 'info');
-    }
-}
+const removeLocationMarker = () => {
+    if(App.tempLocationMarker) { App.map.removeLayer(App.tempLocationMarker); App.tempLocationMarker = null; }
+    App.showNotification('Location marker removed', 'info');
+};
 
 // Initialize live search
-document.addEventListener('DOMContentLoaded', function() {
-    const searchInput = document.getElementById('locationSearchInput');
-    if(searchInput) {
-        searchInput.addEventListener('input', searchLocation);
-        searchInput.addEventListener('keydown', function(e) {
-            if(e.key === 'Enter') {
-                searchLocation();
-            }
-        });
+document.addEventListener('DOMContentLoaded', () => {
+    const inp = document.getElementById('locationSearchInput');
+    if(inp) {
+        inp.addEventListener('input', searchLocation);
+        inp.addEventListener('keydown', e => e.key === 'Enter' && searchLocation());
     }
 });
 
-// Initialize app when page loads
-window.onload = () => {
-    App.init();
-};
+// Initialize app
+window.onload = () => App.init();
     </script>
 </body>
 </html>
